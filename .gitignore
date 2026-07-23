@@ -1,0 +1,13 @@
+.venv/
+reference/
+__pycache__/
+*.pyc
+.affine.lock
+scratch/
+
+# Personal config (copy from config.example.json)
+config.json
+
+# Internal design notes (contain private deployment specifics)
+PLAN.md
+LOCAL-DB-OPTION.md

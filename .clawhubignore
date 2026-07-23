@@ -1,0 +1,7 @@
+.venv/
+reference/
+config.json
+PLAN.md
+LOCAL-DB-OPTION.md
+__pycache__/
+.affine.lock
