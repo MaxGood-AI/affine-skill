@@ -23,6 +23,10 @@ It ships as a [Claude](https://claude.com/claude-code) / [OpenClaw](https://claw
 
 ## Install
 
+> **New here, or not a developer?** Follow **[DETAILED_SETUP.md](DETAILED_SETUP.md)** — a complete,
+> step-by-step, non-technical guide that takes you from nothing to a working setup on a Mac. The
+> steps below are the short version for developers.
+
 Clone the repo, then either run `./affine …` directly or register it as a skill by symlinking
 it into your skills directory:
 
