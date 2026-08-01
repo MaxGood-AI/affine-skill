@@ -116,6 +116,70 @@ def append_specs_to_note(blocks, note_id, specs):
         note_children.append(bid)
 
 
+def children_of(blocks, bid):
+    try:
+        ch = blocks[bid]["sys:children"]
+        return [ch[i] for i in range(len(ch))]
+    except Exception:
+        return []
+
+
+def find_parent(blocks, target_id):
+    """Id of the block whose sys:children contains target_id, or None."""
+    try:
+        ids = list(blocks.keys())
+    except Exception:
+        return None
+    for bid in ids:
+        if target_id in children_of(blocks, bid):
+            return bid
+    return None
+
+
+def subtree_ids(blocks, bid):
+    """bid plus every descendant id, so deletes leave no orphaned blocks behind."""
+    out, stack = set(), [bid]
+    while stack:
+        cur = stack.pop()
+        if cur in out:
+            continue
+        out.add(cur)
+        stack.extend(children_of(blocks, cur))
+    return out
+
+
+def insert_specs_at(blocks, parent_id, index, specs):
+    """Create blocks from specs and splice their ids into parent's children at `index`.
+    Returns the new ids. Caller must already be inside doc.transaction()."""
+    children = blocks[parent_id]["sys:children"]
+    new_ids = []
+    for offset, spec in enumerate(specs):
+        bid, blk = _make_block(spec)
+        blocks[bid] = blk
+        children.insert(index + offset, bid)
+        new_ids.append(bid)
+    return new_ids
+
+
+def remove_subtree(blocks, bid):
+    """Detach bid from its parent and delete it and its descendants.
+    Returns the set of deleted ids. Caller must already be inside doc.transaction()."""
+    parent_id = find_parent(blocks, bid)
+    if parent_id is not None:
+        children = blocks[parent_id]["sys:children"]
+        for i in range(len(children)):
+            if children[i] == bid:
+                del children[i]
+                break
+    doomed = subtree_ids(blocks, bid)
+    for dead in doomed:
+        try:
+            del blocks[dead]
+        except Exception:
+            pass
+    return doomed
+
+
 def build_content_doc(title, markdown):
     """Build a full new page-mode doc (page -> [surface, note] -> content blocks)."""
     doc = Doc()

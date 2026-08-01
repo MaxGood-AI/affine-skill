@@ -101,19 +101,68 @@ def cmd_new(args):
     _note(f"created \"{args.title}\" in {ws.name}. Run `affine sync` to push to the server.")
 
 
+def _text_arg(args, inline, file_attr):
+    path = getattr(args, file_attr, None)
+    if path:
+        with open(path) as f:
+            return f.read()
+    return inline
+
+
+def _plan_edit(args, base, root, ws):
+    """Build the Change for whichever edit operation was requested."""
+    doc_id = args.doc_id
+    if args.replace is not None:
+        new = _text_arg(args, args.with_text, "with_file")
+        if new is None:
+            _err("--replace requires --with TEXT or --with-file FILE (use --with '' to delete)")
+        return write_mod.plan_replace(base, doc_id, args.replace, new, args.all,
+                                      in_block=args.in_block)
+    if args.insert_after is not None or args.insert_before is not None:
+        md = _text_arg(args, args.text, "text_file")
+        if not (md or "").strip():
+            _err("--insert-after/--insert-before requires --text MD or --text-file FILE")
+        before = args.insert_before is not None
+        anchor = args.insert_before if before else args.insert_after
+        return write_mod.plan_insert(base, doc_id, anchor, md, before=before)
+    if args.delete_block is not None:
+        return write_mod.plan_delete_block(base, doc_id, args.delete_block)
+    if args.set_title is not None:
+        return write_mod.plan_set_title(base, doc_id, root, ws.root_id, args.set_title)
+    md = _text_arg(args, args.append, "append_file")
+    if not (md or "").strip():
+        _err("edit requires one of --append, --replace, --insert-after, "
+             "--insert-before, --delete-block or --set-title")
+    return write_mod.plan_append(base, doc_id, md)
+
+
 def cmd_edit(args):
-    if args.append_file:
-        with open(args.append_file) as f:
-            text = f.read()
-    else:
-        text = args.append or ""
-    if not text.strip():
-        _err("edit requires --append TEXT or --append-file FILE")
     ws = config.locate(args.doc_id, args.workspace)
+    needs_root = args.set_title is not None
+
+    if args.dry_run:
+        # Planning is read-only, so a dry run never has to quit the app.
+        with store.read_conn(ws.db_path) as con:
+            store.check_schema(con)
+            base = store.load_doc(con, args.doc_id)
+            root = store.load_doc(con, ws.root_id) if needs_root else None
+        change = _plan_edit(args, base, root, ws)
+        _note(f"(dry run — nothing written; workspace: {ws.name})")
+        for line in change.summary:
+            print(line)
+        return
+
     with store.lock():
         appctl.ensure_stopped()
-        write_mod.append_doc(ws.db_path, args.doc_id, text)
-    print(f"appended to {args.doc_id} in {ws.name}")
+        with store.write_conn(ws.db_path) as con:
+            store.check_schema(con)
+            base = store.load_doc(con, args.doc_id)
+            root = store.load_doc(con, ws.root_id) if needs_root else None
+        change = _plan_edit(args, base, root, ws)
+        write_mod.commit(ws.db_path, change)
+    for line in change.summary:
+        print(line)
+    print(f"edited {args.doc_id} in {ws.name}")
     _note("Run `affine sync` to push to the server.")
 
 
@@ -174,10 +223,37 @@ def build_parser():
     ws(sp)
     sp.set_defaults(fn=cmd_new)
 
-    sp = sub.add_parser("edit", help="append Markdown to a doc (quits AFFiNE; sync separately)")
+    sp = sub.add_parser(
+        "edit",
+        help="edit a doc in place: replace/insert/delete-block/set-title/append "
+             "(quits AFFiNE; sync separately)",
+    )
     sp.add_argument("doc_id")
-    sp.add_argument("--append")
-    sp.add_argument("--append-file")
+    op = sp.add_mutually_exclusive_group()
+    op.add_argument("--replace", metavar="OLD",
+                    help="literal text to replace in place (must match exactly one "
+                         "block unless --all); works inside table cells")
+    op.add_argument("--insert-after", metavar="ANCHOR",
+                    help="insert --text after the block containing ANCHOR")
+    op.add_argument("--insert-before", metavar="ANCHOR",
+                    help="insert --text before the block containing ANCHOR")
+    op.add_argument("--delete-block", metavar="ANCHOR",
+                    help="delete the block containing ANCHOR (and any nested children)")
+    op.add_argument("--set-title", metavar="TITLE",
+                    help="retitle the doc (updates the page and the workspace sidebar)")
+    op.add_argument("--append", metavar="MD", help="append Markdown to the end of the doc")
+    sp.add_argument("--with", dest="with_text", metavar="NEW",
+                    help="replacement text for --replace (use '' to delete the match)")
+    sp.add_argument("--with-file", metavar="FILE", help="read --with text from a file")
+    sp.add_argument("--text", metavar="MD", help="Markdown for --insert-after/--insert-before")
+    sp.add_argument("--text-file", metavar="FILE", help="read --text from a file")
+    sp.add_argument("--append-file", metavar="FILE", help="read --append text from a file")
+    sp.add_argument("--all", action="store_true",
+                    help="with --replace: replace every occurrence instead of requiring one")
+    sp.add_argument("--in-block", metavar="ANCHOR",
+                    help="with --replace: only inside the block containing ANCHOR")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="show what would change without writing (leaves AFFiNE running)")
     ws(sp)
     sp.set_defaults(fn=cmd_edit)
 

@@ -50,6 +50,32 @@ Copy `config.example.json` to `config.json` and set your default workspace (opti
 ./affine sync                       # push staged writes in ALL cloud workspaces
 ```
 
+### Editing an existing doc
+
+One operation per `affine edit` call:
+
+```
+./affine edit DOC_ID --replace "OLD" --with "NEW"     # in place, incl. inside table cells
+./affine edit DOC_ID --insert-after "ANCHOR" --text "## New section"
+./affine edit DOC_ID --insert-before "ANCHOR" --text-file section.md
+./affine edit DOC_ID --delete-block "ANCHOR"          # drops that block and its children
+./affine edit DOC_ID --set-title "New Title"          # page + sidebar together
+./affine edit DOC_ID --append "text"                  # add to the end
+```
+
+Modifiers: `--all` (replace every occurrence), `--in-block "ANCHOR"` (confine a replace to one
+block), `--dry-run`, and `--with-file` / `--text-file` / `--append-file`.
+
+`--replace` splices the existing rich-text object, so block identity, inline formatting and
+table structure survive — the reason to edit rather than rewrite a doc. Matches are literal
+(no regex) and cannot span blocks, since each paragraph, list item and table cell is its own
+rich-text object. Replacements and anchors must resolve to exactly one match; when they don't,
+the error lists the candidates so you can extend the text, add `--in-block`, or pass `--all`.
+
+`--dry-run` prints a before/after line per match, writes nothing, and does not quit AFFiNE.
+Use it before any replace: policy and style documents habitually quote the wording they ban,
+and those quotations are matches you do not want to rewrite.
+
 Add `--json` for machine output. **Workspace-aware:** a server can hold many workspaces, so
 `list`/`search`/`read`/`edit`/`delete` span all of them and `read`/`edit`/`delete` locate a
 doc wherever it lives — you never need to know which workspace holds it. Pass `--workspace
@@ -70,6 +96,12 @@ changes are local-only (they also sync next time you open AFFiNE).
 - **Write:** build a Yjs delta, validate it in memory, back up the DB, insert an `updates` row
   and bump `clocks`. Creates also register the doc in the root doc's `meta.pages`; the app
   self-heals the `spaces` subdoc on next launch. Deletes set the `trash` flag.
+- **Edit:** splice the block's existing `Y.Text` rather than rebuilding it from Markdown, so
+  block ids, inline formatting and table structure are preserved. Offsets into a `Y.Text` are
+  **UTF-8 byte offsets**, not Python string indices — passing a codepoint index corrupts any
+  text containing em dashes or accents and panics the Rust layer on emoji, so every index goes
+  through one conversion helper in `affine_local/textops.py`. Validation then requires every
+  untargeted text field to come back byte-identical before anything is written.
 - **Sync:** quit → write → relaunch → foreground. AFFiNE's sync engine re-scans on launch and
   pushes any doc whose local clock is ahead of the pushed clock. (A resident, connected app
   won't re-scan on its own — the relaunch + foreground is the trigger.) AFFiNE only syncs the

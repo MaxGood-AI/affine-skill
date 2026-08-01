@@ -3,6 +3,35 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-07-31
+
+In-place editing. Previously `edit` could only append, so correcting a word inside a document
+meant deleting and recreating it — which destroys every table, because the Markdown writer
+cannot emit table blocks.
+
+- `edit --replace OLD --with NEW` edits text in place by splicing the block's existing `Y.Text`,
+  preserving block ids, inline formatting and table structure. It reaches table cells, which a
+  Markdown round-trip cannot reproduce. `--with ""` deletes the matched text.
+- `edit --insert-after ANCHOR` / `--insert-before ANCHOR` add Markdown blocks at a position
+  instead of only at the end; `--delete-block ANCHOR` removes a block and any nested children;
+  `--set-title` retitles a doc, updating the page block and the workspace root's page meta
+  together so the document and the sidebar cannot disagree.
+- `--dry-run` reports what would change and writes nothing. It runs against a read-only copy of
+  the store, so unlike every other write path it does not quit AFFiNE.
+- Replacements and anchors require exactly one match; the error lists the candidates. `--all`
+  replaces every occurrence and `--in-block ANCHOR` confines a replace to a single block, for
+  phrases that recur legitimately (a banned term and the rule quoting it). An anchor equal to a
+  whole block's text wins over anchors merely contained in one.
+- Every edit is validated against an in-memory copy before it is written: targeted fields must
+  match a plain-Python computation of the expected result, all other text fields must be
+  byte-identical, and the block structure must be unchanged.
+- Fixed a latent corruption hazard: `Y.Text` offsets are UTF-8 byte offsets, not Python string
+  indices. Codepoint indices silently mangle text containing em dashes, curly quotes or accents
+  and panic the Rust layer on astral characters. All conversion is centralized in
+  `affine_local/textops.py` and covered by regression tests.
+- `edit --append` now runs through the same plan-validate-commit path as the other operations
+  and supports `--dry-run`.
+
 ## [0.1.0] — 2026-07-23
 
 Initial release.
