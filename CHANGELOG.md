@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-09-07
+
+OpenClaw compatibility and a SKILL.md written for smaller models.
+
+- `--sync` on `new`, `edit` and `delete` pushes the workspace just written to as soon as the
+  write lands, so a single change is one command instead of a write followed by `affine sync`.
+  Batching several writes before one `affine sync` still works as before.
+- The launcher builds its venv from the first Python ≥ 3.10 it finds (`$AFFINE_PYTHON`,
+  `python3` on `PATH`, Homebrew, `/usr/local`, then versioned names) and rebuilds a venv that can
+  no longer import `pycrdt`. macOS's bundled Python 3.9 cannot install `pycrdt`, so a launcher
+  that trusted `python3` blindly failed on a stock Mac.
+- `SKILL.md` is restructured as numbered rules, task recipes with exact commands, a command
+  reference, and an error table, so that a smaller local model (e.g. a 27B Qwen under OpenClaw)
+  can follow it without inference. The frontmatter carries OpenClaw's `os`, `emoji` and
+  `requires.bins` gating fields and a top-level `homepage`.
+- README documents the OpenClaw install path (`~/.openclaw/workspace/skills/affine`).
+
 ## [0.2.0] — 2026-07-31
 
 In-place editing. Previously `edit` could only append, so correcting a word inside a document

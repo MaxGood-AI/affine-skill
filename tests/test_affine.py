@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Deterministic unit tests: Markdown parsing, block build/decode round-trip,
 timestamp helpers, search snippet. No AFFiNE app, no DB, no network."""
+import contextlib
 import datetime as dt
+import io
 import unittest
+from unittest import mock
 
 from affine_local import blocks as B
+from affine_local import cli
+from affine_local import config
 from affine_local import decode
 from affine_local import search as search_mod
 from affine_local import store
@@ -409,6 +414,55 @@ class TestSnippet(unittest.TestCase):
         md = "alpha beta gamma delta needle epsilon zeta"
         snip = search_mod._snippet(md, ["needle"], width=20)
         self.assertIn("needle", snip)
+
+
+class TestCliSyncFlag(unittest.TestCase):
+    """`--sync` on the write commands pushes right after the write."""
+
+    def _ws(self, kind):
+        return config.Workspace("srv", "ws1", "/nonexistent/storage.db", "Team", kind)
+
+    def test_workspaces_without_affine_is_an_error_not_silence(self):
+        args = cli.build_parser().parse_args(["workspaces"])
+        err = io.StringIO()
+        with mock.patch.object(cli.config, "list_workspaces", return_value=[]), \
+                contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit):
+                cli.cmd_workspaces(args)
+        self.assertIn("no AFFiNE workspaces found", err.getvalue())
+
+    def test_parser_accepts_sync_on_write_commands(self):
+        p = cli.build_parser()
+        self.assertTrue(p.parse_args(["new", "--title", "T", "--sync"]).sync)
+        self.assertTrue(p.parse_args(["edit", "ID", "--append", "x", "--sync"]).sync)
+        self.assertTrue(p.parse_args(["delete", "ID", "--sync"]).sync)
+        self.assertFalse(p.parse_args(["delete", "ID"]).sync)
+
+    def test_no_sync_only_reminds(self):
+        with mock.patch.object(cli.appctl, "sync") as sync:
+            cli._after_write(self._ws("cloud"), sync_now=False)
+        sync.assert_not_called()
+
+    def test_local_workspace_has_nothing_to_push(self):
+        with mock.patch.object(cli.appctl, "sync") as sync:
+            cli._after_write(self._ws("local"), sync_now=True)
+        sync.assert_not_called()
+
+    def test_sync_pushes_only_the_written_workspace(self):
+        ws = self._ws("cloud")
+        out = io.StringIO()
+        with mock.patch.object(cli.appctl, "sync", return_value=(True, 6, [])) as sync, \
+                mock.patch.object(cli.store, "lock"), contextlib.redirect_stdout(out):
+            cli._after_write(ws, sync_now=True)
+        sync.assert_called_once_with([ws])
+        self.assertIn("synced 1 workspace(s)", out.getvalue())
+
+    def test_sync_failure_is_an_error(self):
+        ws = self._ws("cloud")
+        with mock.patch.object(cli.appctl, "sync", return_value=(False, 120, [ws])), \
+                mock.patch.object(cli.store, "lock"), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                cli._after_write(ws, sync_now=True)
 
 
 if __name__ == "__main__":

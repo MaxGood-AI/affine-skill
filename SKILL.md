@@ -1,167 +1,169 @@
 ---
 name: affine
-description: Read, search, create, edit in place, and delete documents in a self-hosted AFFiNE knowledge base by operating on the AFFiNE desktop app's local store — no server credentials or API tokens required. Use when the user wants to look something up in AFFiNE, gather information from AFFiNE docs, create/write/append an AFFiNE document, change text inside an existing one (including inside tables), retitle it, or delete/trash one. Triggers include "in AFFiNE", "our AFFiNE", "the AFFiNE wiki / knowledge base".
+description: Search, read, create, edit, and delete documents in the team's self-hosted AFFiNE knowledge base (the wiki) through the AFFiNE desktop app's local store — no server credentials or API tokens. Use for any request that mentions AFFiNE, "our wiki", "the knowledge base", brand guidelines, or looking up / writing team documentation.
 license: BSD-3-Clause
-compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus python3. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
+homepage: https://github.com/MaxGood-AI/affine-skill
+compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus Python >= 3.10. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   author: Mishkin Berteig
   openclaw:
+    emoji: "📚"
+    os:
+      - darwin
     requires:
       bins:
         - python3
     homepage: https://github.com/MaxGood-AI/affine-skill
 ---
 
-# affine
+# affine — the team's AFFiNE knowledge base
 
-Manage documents in a **self-hosted [AFFiNE](https://affine.pro)** knowledge base without
-any server API, token, or password. This skill reads and writes the AFFiNE **desktop app's
-own local store** (an unencrypted SQLite database of Yjs/BlockSuite CRDT documents), decoding
-docs to Markdown for reading and staging Yjs updates for writing. The desktop app then syncs
-your changes to the server the same way it syncs your own edits.
+AFFiNE is the team's wiki. This skill reads and writes it through one command-line program
+named `affine`, which sits in the **same folder as this SKILL.md**. Always call it by its full
+path. Examples:
 
-Everything runs through one launcher, which bootstraps its Python virtualenv on first use:
+- OpenClaw: `~/.openclaw/workspace/skills/affine/affine`
+- Claude Code: `~/.claude/skills/affine/affine`
 
-```
-<skill-dir>/affine <command> [args]
-```
+No login, token, or API key is needed. The first run installs a small Python helper (up to a
+minute). Every command prints plain text; add `--json` to any command for JSON output.
 
-(When installed as a skill, `<skill-dir>` is the skill's own directory, e.g.
-`~/.claude/skills/affine/affine`.) Add `--json` to any command for machine-readable output.
+## Rules — read these first
 
-## Workspace-aware by default
+1. Put every argument in double quotes: `affine search "brand colours"`.
+2. Multi-line text never goes on the command line. Write it to a file (for example
+   `/tmp/body.md`) and pass the file with `--body-file`, `--append-file`, `--text-file` or
+   `--with-file`.
+3. Reading (`workspaces`, `list`, `search`, `read`, and any command with `--dry-run`) is always
+   safe. It never disturbs the AFFiNE app.
+4. Writing (`new`, `edit`, `delete`) quits the AFFiNE app, stages the change locally, and does
+   **not** reach the server by itself. Add `--sync` to the write command to push right away, or
+   run `affine sync` once after several writes. Until then the change is local-only.
+5. Before any `--replace` or `--delete-block`, run the same command with `--dry-run` first and
+   read the before/after lines it prints. Only then run it without `--dry-run`.
+6. One editing operation per `affine edit` command. To make three changes, run `affine edit`
+   three times.
+7. Never open, copy, or modify AFFiNE's `storage.db` yourself. Only use the `affine` command.
+8. Document ids look like `KIYQGEFu0zcfTIiGBV1VE` (21 characters). Get them from `search` or
+   `list`. Never guess an id.
 
-A server can hold **many workspaces**, and a document you're looking for may be in any of
-them. So `list`, `search`, `read`, `edit`, and `delete` operate across **all workspaces** by
-default — you never need to know which workspace holds a doc. `read`/`edit`/`delete` **locate**
-the doc automatically wherever it lives. Pass `--workspace NAME` (a case-insensitive substring
-of the workspace name) to restrict any command to one workspace. Only `new` needs a target
-workspace (it must pick a home to create in).
+## Recipes
 
-## Reading — safe anytime, never touches the app
+### Answer a question from the knowledge base
 
-| Command | Purpose |
+1. `affine search "the key words"` — prints one hit per line as `[workspace] DOC_ID  Title`,
+   followed by a snippet. It sweeps every workspace.
+2. `affine read DOC_ID` for the best one or two hits — prints the document as Markdown.
+3. Answer from what you read. If nothing matched, search again with fewer or different words.
+
+### See what exists
+
+- `affine list` — every document in every workspace, one `DOC_ID  Title` per line.
+- `affine workspaces` — the workspaces (kind, id, name).
+
+### Create a document
+
+1. Write the body as Markdown to a file, for example `/tmp/body.md`. Supported: `#` headings,
+   `-` / `1.` / `- [ ]` lists, `>` quotes, fenced code, `---` rules, paragraphs (one line = one
+   paragraph).
+2. `affine new --title "Meeting Notes 2026-09-07" --body-file /tmp/body.md --sync`
+3. Output: the new DOC_ID, then `synced 1 workspace(s)`.
+
+The document is created in the default workspace named in the skill's `config.json`. Add
+`--workspace "Name"` to create it somewhere else.
+
+### Change wording inside a document (works inside table cells too)
+
+1. `affine edit DOC_ID --replace "old wording" --with "new wording" --dry-run`
+2. Check that the printed before/after line is exactly the change you want.
+3. Run the same command without `--dry-run` and with `--sync`.
+
+- `--with ""` deletes the matched text.
+- Error `no match`: copy the exact text from `affine read DOC_ID` and try again.
+- Error listing several matches: use a longer, more specific text; or add
+  `--in-block "text found only in the right block"`; or add `--all` when every occurrence
+  really should change.
+
+### Add content to a document
+
+- At the end: `affine edit DOC_ID --append-file /tmp/more.md --sync`
+- After a specific block: `affine edit DOC_ID --insert-after "text in that block" --text-file /tmp/more.md --sync`
+- Before a specific block: same with `--insert-before`.
+
+### Rename a document
+
+`affine edit DOC_ID --set-title "New Title" --sync` — updates the page and the sidebar together.
+
+### Remove one block (paragraph, heading, list item)
+
+1. `affine edit DOC_ID --delete-block "text in that block" --dry-run`
+2. If the printed block is the right one, run it again without `--dry-run` and with `--sync`.
+
+This removes the block and anything nested under it. It cannot be undone from AFFiNE's Trash.
+
+### Delete a whole document
+
+`affine delete DOC_ID --sync` — moves it to AFFiNE's Trash, where the user can restore it.
+
+### Push pending changes
+
+`affine sync` — relaunches AFFiNE, brings its window to the front for a few seconds, and
+waits until every cloud workspace has pushed (usually 5–15 s). The window flash is expected.
+`sync` may leave an extra workspace tab open in the app; that is harmless.
+
+## Command reference
+
+| Command | What it does |
 |---|---|
-| `affine workspaces` | List workspaces (kind, id, name). |
-| `affine list [--limit N] [--all]` | List docs in **every** workspace, grouped, as `id ⇥ title`. `--limit` is per-workspace; `--all` includes trashed docs. |
-| `affine search "QUERY" [--limit N]` | Keyword search across **all** workspaces → `[workspace] id ⇥ title` + snippet. |
-| `affine read DOC_ID` | Auto-locate the doc across workspaces and print it as Markdown. |
+| `affine workspaces` | List workspaces. |
+| `affine list [--limit N] [--all]` | List docs in every workspace. `--all` includes trashed docs. |
+| `affine search "QUERY" [--limit N]` | Keyword search across every workspace. |
+| `affine read DOC_ID` | Print a doc as Markdown (auto-located in any workspace). |
+| `affine new --title "T" --body-file FILE [--workspace "W"] [--sync]` | Create a doc; prints its id. `--body "text"` works for one-line bodies. |
+| `affine edit DOC_ID --replace "OLD" --with "NEW" [--all] [--in-block "A"] [--dry-run] [--sync]` | Replace literal text in place. |
+| `affine edit DOC_ID --insert-after "A" --text-file FILE [--dry-run] [--sync]` | Insert Markdown after the block containing A (`--insert-before` for before). `--text "MD"` for one line. |
+| `affine edit DOC_ID --delete-block "A" [--dry-run] [--sync]` | Delete the block containing A and its children. |
+| `affine edit DOC_ID --set-title "T" [--sync]` | Retitle a doc. |
+| `affine edit DOC_ID --append-file FILE [--sync]` | Append Markdown at the end. `--append "MD"` for one line. |
+| `affine delete DOC_ID [--sync]` | Move a doc to Trash. |
+| `affine sync` | Push every staged change to the server. |
 
-To answer a question from the knowledge base: `search` the relevant terms (it sweeps every
-workspace), then `read` the top hits by id. The `[workspace]` tag on each search hit tells you
-where it lives, but you don't need it for `read`/`edit`/`delete` — they find the doc for you.
+Every command accepts `--workspace "NAME"` (a case-insensitive part of the workspace name) to
+limit it to one workspace, and `--json` for machine-readable output.
 
-## Writing — a two-step workflow you MUST follow
+## How text matching works
 
-Write commands (`new`, `edit`, `delete`) **quit the AFFiNE app** and stage the change in the
-local store. They do **not** reach the server by themselves. After all your writes, run
-**`affine sync` exactly once** to push everything.
+- Matches are **literal text**. No regular expressions, no wildcards.
+- A match **cannot span two blocks**. Every paragraph, heading, list item and table cell is a
+  separate block. Change one block at a time.
+- `--replace` and every anchor (`--insert-after`, `--insert-before`, `--delete-block`,
+  `--in-block`) must match **exactly one** block. When several match, the error lists them:
+  respond with a longer text, `--in-block`, or (for replace only) `--all`.
+- An anchor that equals a whole block's text beats one that is merely contained in a block.
+- Prefer `--replace` over deleting and recreating a document. Replacement keeps block ids,
+  inline formatting and tables intact; recreating destroys every table.
 
-| Command | Purpose |
+## Errors and what to do
+
+| Message | Meaning and action |
 |---|---|
-| `affine new --title "T" [--body "MD" \| --body-file FILE]` | Create a doc in the target workspace (default, or `--workspace`); prints the new id. |
-| `affine edit DOC_ID <operation>` | Change an existing doc in place — see **Editing** below. |
-| `affine delete DOC_ID` | Move a doc to Trash (auto-located; recoverable in the AFFiNE UI). |
-| `affine sync` | Relaunch AFFiNE and push staged changes in **all** cloud workspaces (~5–15s). |
+| `no AFFiNE workspaces found` | AFFiNE desktop is not installed or not signed in on this Mac. Tell the user; nothing else works until it is. |
+| `doc X not found in any workspace` | Wrong id. Run `affine search` or `affine list` and copy the id. |
+| `no match for ...` / several matches listed | See "How text matching works". |
+| `multiple workspaces — pass --workspace` | `new` needs a target: add `--workspace "Name"` (names from `affine workspaces`). |
+| `AFFiNE is still running and would not quit` | Ask the user to quit AFFiNE, then retry the write. |
+| `unpushed after 120s ...` | Run `affine sync` again. If it repeats, tell the user AFFiNE may be signed out. |
+| `affine needs Python >= 3.10` | Tell the user to run `brew install python`. |
 
-Canonical pattern — do the writes, then sync once:
+## Safety and limits
 
-```
-affine new --title "Q3 Notes" --body-file /tmp/notes.md
-affine edit KIYQGEFu0zcfTIiGBV1VE --replace "Q2 target" --with "Q3 target"
-affine edit KIYQGEFu0zcfTIiGBV1VE --append "New section text."
-affine delete pzqwFDoWpcj8mv9osqF3b
-affine sync
-```
-
-Until `sync` runs, changes are local-only (they would also sync next time the user opens
-AFFiNE). `sync` briefly **foregrounds** the AFFiNE window — that is required to trigger the
-push — and waits until nothing is unpushed.
-
-Body/append/insert text is **Markdown**: `#`..`######` headings, `-`/`1.`/`- [ ]` lists, `>`
-blockquotes, ```` ``` ```` fenced code, `---` rules, and paragraphs (one line = one
-paragraph). Pass multi-line Markdown via `--body-file` / `--append-file` / `--text-file`,
-not inline.
-
-## Editing — one operation per `affine edit` call
-
-| Operation | Purpose |
-|---|---|
-| `--replace "OLD" --with "NEW"` | Replace literal text wherever it lives, **including inside table cells**. Requires exactly one match unless `--all`. `--with ""` deletes the matched text. |
-| `--insert-after "ANCHOR" --text "MD"` | Insert new Markdown blocks straight after the block containing ANCHOR (`--insert-before` for the other side). |
-| `--delete-block "ANCHOR"` | Delete the block containing ANCHOR, plus any blocks nested under it. |
-| `--set-title "TITLE"` | Retitle the doc — updates the page **and** the workspace sidebar together. |
-| `--append "MD"` | Add Markdown to the end of the doc. |
-
-Modifiers: `--all` (replace every occurrence), `--in-block "ANCHOR"` (confine a replace to one
-block), `--dry-run`, and the `--with-file` / `--text-file` / `--append-file` file variants.
-
-**Prefer `--replace` over rewriting a doc.** Replacement splices the existing rich-text object,
-so block identity, inline formatting and table structure survive. Deleting and recreating a doc
-to change a few words destroys every table in it, because writes can only emit paragraphs,
-headings, lists, quotes, code and dividers.
-
-### Matching rules
-
-- **A match cannot span blocks.** Every paragraph, heading, list item and table cell is a
-  separate rich-text object. `--replace` searches inside one block at a time, so an OLD string
-  containing a paragraph break will never match. Change one block at a time.
-- **Ambiguity is an error, not a guess.** `--replace` and every ANCHOR demand exactly one match.
-  When several match, the error lists the candidates; respond by extending the search text,
-  scoping with `--in-block`, or passing `--all` when you really do mean all of them.
-- **An anchor that *is* a whole block beats one merely contained in a block**, so a short anchor
-  can name a table-of-contents entry without colliding with the heading that repeats it.
-- `--in-block` is the tool for a phrase that legitimately recurs — a term and the style rule
-  quoting it, say. Scope the edit to the block you mean.
-
-### Always dry-run a replace first
-
-```
-affine edit DOC_ID --replace "Taster" --with "Tester" --all --dry-run
-```
-
-`--dry-run` prints a before/after line per match and writes nothing. It is **read-only and does
-not quit AFFiNE**, so it is free to run at any time. Use it to confirm you are not about to
-rewrite a deliberate quotation of the very text you are replacing — style guides and policy docs
-routinely quote the wording they ban.
-
-## Which workspace `new` and `sync` use
-
-Reads and doc-id operations span all workspaces (above). Two commands are workspace-specific:
-
-- **`new`** creates in the `default_workspace` from the skill's `config.json` (copy it from
-  `config.example.json`); if unset and there is exactly one cloud workspace, that one is used;
-  otherwise pass `--workspace NAME` (or a workspace id).
-- **`sync`** pushes **every** cloud workspace with staged changes. Because AFFiNE only syncs
-  the foreground workspace on its own, `sync` opens any non-foreground workspace that still has
-  unpushed changes in a tab (via the `affine://` deep link) so it, too, pushes. This may leave
-  an extra tab or two open in the app — harmless.
-
-## Safety & guarantees
-
-- Every write is preceded by a **pruned backup** of the store (`storage.db.skillbak-*`) and
-  followed by `PRAGMA integrity_check`; the delta is validated in memory before it is written.
-- Edits are **validated exhaustively before they are written**: the change is applied to an
-  in-memory copy and the result must match, field by field, what was asked for — every
-  untargeted paragraph, list item and table cell has to come back byte-identical, and the block
-  structure has to be unchanged. Anything else aborts without touching the store.
-- Operations are **`flock`-serialized**, so concurrent agents don't collide.
-- A **schema check** aborts if the AFFiNE storage format differs from what this skill supports.
-- `delete` moves to **Trash** (recoverable); it never permanently erases. `--delete-block`
-  removes content from a doc and is **not** recoverable through the UI's Trash — dry-run it.
-
-## Requirements & limitations
-
-- Requires the **AFFiNE desktop app ≥ v0.27.3** installed and **signed in** — `sync` relies on
-  the app's session to reach the server. (v0.27.2 and earlier have a cold-start bug that
-  re-logs-in every launch and blocks programmatic sync; upgrade first.)
-- macOS only (uses `osascript`/`open` for the app lifecycle). The read/decode/encode core is
-  portable; only `affine_local/appctl.py` is macOS-specific.
-- **Tables** (`affine:table`) render as GitHub-flavored Markdown tables on read (first row is
-  treated as the header). Inline text formatting (bold/italic/links), database blocks, and
-  edgeless-canvas elements still render as plain text or placeholders.
-- **New** content is limited to paragraphs, headings, lists, quotes, code and dividers — the
-  block types the Markdown writer emits. `--replace` has no such limit: it edits the text of
-  whatever block already exists, which is how table cells get corrected.
-- `--replace` matches **literal text, not patterns** — no regular expressions or wildcards.
+- Every write backs up the store first (`storage.db.skillbak-*`), validates the change in
+  memory, writes it, then runs an integrity check. Operations are lock-serialized, and a schema
+  check aborts if the AFFiNE storage format is not the supported one.
+- `delete` moves to Trash and is recoverable in the app. `--delete-block` is not.
+- Reads render tables as Markdown tables. Inline bold/italic/links come out as plain text;
+  database blocks and canvas elements come out as placeholders.
+- New content is limited to paragraphs, headings, lists, quotes, code and dividers. `--replace`
+  edits the text of any existing block, including table cells, so tables are corrected in place.
+- Requires the AFFiNE desktop app ≥ v0.27.3, installed and signed in. macOS only.

@@ -64,14 +64,15 @@ finish (the prompt reappears) before the next one.
 
 ## Step 2 — Make sure Python is installed (one-time)
 
-The skill uses a free tool called **Python**. Most Macs need it installed once.
+The skill uses a free tool called **Python**, version **3.10 or newer**. Most Macs need it
+installed once (the copy Apple ships is 3.9, which is too old).
 
 1. Open **Terminal** (see the note above) and run:
    ```
    python3 --version
    ```
-2. If you see something like `Python 3.11.5`, you're done — **skip to Step 3**.
-3. If you see an error or nothing useful, install Python:
+2. If you see `Python 3.10` or higher (for example `Python 3.14.5`), you're done — **skip to Step 3**.
+3. If you see an error, `Python 3.9.x`, or nothing useful, install Python:
    - Go to **https://www.python.org/downloads/macos/**, download the latest **macOS installer**,
      and run it (double-click, then click **Continue** / **Install** through the prompts).
    - Then re-run `python3 --version` to confirm it now shows a version.
@@ -186,6 +187,7 @@ window may flash to the front for a few seconds — **this is normal and expecte
 | Problem | Fix |
 |---|---|
 | `command not found: python3` | Install Python — see **Step 2**. |
+| `affine needs Python >= 3.10; none found` | Install a newer Python — see **Step 2**. |
 | **"no AFFiNE workspaces found"** | Make sure AFFiNE is installed, **signed in**, and has finished syncing (Step 1). Then re-run Step 6. |
 | The first run seems stuck | It's downloading a helper on first use — give it up to a minute with internet on. |
 | Your agent doesn't seem to use the skill | Fully **quit and reopen Claude Code**, then try again. Re-check the shortcut with `ls -l ~/.claude/skills/affine` (Step 4). |

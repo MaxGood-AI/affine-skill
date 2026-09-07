@@ -24,6 +24,8 @@ def _note(msg):
 
 def cmd_workspaces(args):
     wss = config.list_workspaces()
+    if not wss:
+        _err("no AFFiNE workspaces found (is the desktop app installed and signed in?)")
     if args.json:
         print(json.dumps([w.as_dict() for w in wss], indent=2))
         return
@@ -91,6 +93,26 @@ def _body(args):
     return args.body or ""
 
 
+def _sync(wss):
+    """Relaunch AFFiNE and wait until every given cloud workspace has pushed."""
+    with store.lock():
+        ok, secs, remaining = appctl.sync(wss)
+    if ok:
+        print(f"synced {len(wss)} workspace(s) ({secs}s)")
+    else:
+        _err(f"unpushed after {secs}s in: {[w.name for w in remaining]}; run `affine sync` again")
+
+
+def _after_write(ws, sync_now):
+    """Push the workspace just written to when --sync was given; otherwise remind."""
+    if not sync_now:
+        _note("Run `affine sync` to push to the server.")
+    elif ws.kind != "cloud":
+        _note(f"{ws.name} is a local workspace; nothing to push.")
+    else:
+        _sync([ws])
+
+
 def cmd_new(args):
     ws = config.resolve_one(args.workspace)
     with store.lock():
@@ -98,7 +120,8 @@ def cmd_new(args):
         doc_id = write_mod.new_doc(ws.db_path, ws.root_id, ws.server_id, ws.workspace_id,
                                    args.title, _body(args))
     print(doc_id)
-    _note(f"created \"{args.title}\" in {ws.name}. Run `affine sync` to push to the server.")
+    _note(f"created \"{args.title}\" in {ws.name}.")
+    _after_write(ws, args.sync)
 
 
 def _text_arg(args, inline, file_attr):
@@ -163,7 +186,7 @@ def cmd_edit(args):
     for line in change.summary:
         print(line)
     print(f"edited {args.doc_id} in {ws.name}")
-    _note("Run `affine sync` to push to the server.")
+    _after_write(ws, args.sync)
 
 
 def cmd_delete(args):
@@ -172,17 +195,12 @@ def cmd_delete(args):
         appctl.ensure_stopped()
         write_mod.trash_doc(ws.db_path, ws.root_id, args.doc_id)
     print(f"moved {args.doc_id} to Trash in {ws.name}")
-    _note("Run `affine sync` to push to the server.")
+    _after_write(ws, args.sync)
 
 
 def cmd_sync(args):
     wss = [config.resolve_one(args.workspace)] if args.workspace else config.cloud_workspaces()
-    with store.lock():
-        ok, secs, remaining = appctl.sync(wss)
-    if ok:
-        print(f"synced {len(wss)} workspace(s) ({secs}s)")
-    else:
-        _err(f"unpushed after {secs}s in: {[w.name for w in remaining]}; run `affine sync` again")
+    _sync(wss)
 
 
 def build_parser():
@@ -194,6 +212,11 @@ def build_parser():
 
     def js(sp):
         sp.add_argument("--json", action="store_true", help="machine-readable output")
+
+    def sync_flag(sp):
+        sp.add_argument("--sync", action="store_true",
+                        help="push to the server right after this write (same as running "
+                             "`affine sync` afterwards)")
 
     sp = sub.add_parser("workspaces", help="list workspaces")
     js(sp)
@@ -220,7 +243,7 @@ def build_parser():
     sp.add_argument("--title", required=True)
     sp.add_argument("--body")
     sp.add_argument("--body-file")
-    ws(sp)
+    ws(sp); sync_flag(sp)
     sp.set_defaults(fn=cmd_new)
 
     sp = sub.add_parser(
@@ -254,12 +277,12 @@ def build_parser():
                     help="with --replace: only inside the block containing ANCHOR")
     sp.add_argument("--dry-run", action="store_true",
                     help="show what would change without writing (leaves AFFiNE running)")
-    ws(sp)
+    ws(sp); sync_flag(sp)
     sp.set_defaults(fn=cmd_edit)
 
     sp = sub.add_parser("delete", help="move a doc to Trash (quits AFFiNE; sync separately)")
     sp.add_argument("doc_id")
-    ws(sp)
+    ws(sp); sync_flag(sp)
     sp.set_defaults(fn=cmd_delete)
 
     sp = sub.add_parser("sync", help="relaunch AFFiNE and push local changes to the server")

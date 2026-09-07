@@ -18,8 +18,12 @@ It ships as a [Claude](https://claude.com/claude-code) / [OpenClaw](https://claw
 - macOS with the **AFFiNE desktop app ≥ v0.27.3** installed and **signed in**.
   v0.27.2 and earlier have a client cold-start bug that re-logs-in every launch and prevents
   programmatic sync — upgrade first.
-- `python3`. The `affine` launcher creates its own `.venv` on first run and installs the sole
-  dependency, [`pycrdt`](https://pypi.org/project/pycrdt/) (Yjs/CRDT decode + encode).
+- **Python 3.10 or newer** (Homebrew's `python3` qualifies; the 3.9 that macOS ships as
+  `/usr/bin/python3` does not). The `affine` launcher creates its own `.venv` on first run and
+  installs the sole dependency, [`pycrdt`](https://pypi.org/project/pycrdt/) (Yjs/CRDT decode +
+  encode). It builds the venv from the first qualifying interpreter among `$AFFINE_PYTHON`,
+  `python3` on `PATH`, `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, then
+  `python3.14` … `python3.10`, and rebuilds a venv that can no longer import `pycrdt`.
 
 ## Install
 
@@ -27,13 +31,28 @@ It ships as a [Claude](https://claude.com/claude-code) / [OpenClaw](https://claw
 > step-by-step, non-technical guide that takes you from nothing to a working setup on a Mac. The
 > steps below are the short version for developers.
 
-Clone the repo, then either run `./affine …` directly or register it as a skill by symlinking
-it into your skills directory:
+Clone the repo, then either run `./affine …` directly or register it as a skill.
+
+**Claude Code** — symlink it into your skills directory:
 
 ```
 git clone https://github.com/MaxGood-AI/affine-skill.git
 ln -s "$PWD/affine-skill" ~/.claude/skills/affine
 ```
+
+**OpenClaw** — copy it into the agent's workspace skills directory (the highest-priority
+skill source), then confirm it is `ready`:
+
+```
+git clone https://github.com/MaxGood-AI/affine-skill.git
+mkdir -p ~/.openclaw/workspace/skills
+cp -R affine-skill ~/.openclaw/workspace/skills/affine
+openclaw skills info affine
+```
+
+`SKILL.md` carries the OpenClaw gating metadata (`os: darwin`, `requires.bins: python3`), and
+the skill's own `.gitignore` keeps `.venv/`, `config.json` and the lock file out of the
+workspace's git history. New OpenClaw sessions pick the skill up automatically.
 
 Copy `config.example.json` to `config.json` and set your default workspace (optional).
 
@@ -48,6 +67,7 @@ Copy `config.example.json` to `config.json` and set your default workspace (opti
 ./affine edit DOC_ID --append "text"           # auto-located
 ./affine delete DOC_ID              # move to Trash (auto-located)
 ./affine sync                       # push staged writes in ALL cloud workspaces
+./affine new --title "T" --body-file body.md --sync   # write, then push, in one command
 ```
 
 ### Editing an existing doc
@@ -86,7 +106,9 @@ NAME` to restrict any command; only `new` requires a single target (default or `
 Write commands (`new`/`edit`/`delete`) **quit AFFiNE** and stage the change locally; they do
 not reach the server on their own. Do all writes, then run **`affine sync` once** — it
 relaunches and briefly foregrounds AFFiNE, whose session pushes the changes (~5s). Until then
-changes are local-only (they also sync next time you open AFFiNE).
+changes are local-only (they also sync next time you open AFFiNE). For a single write, add
+**`--sync`** to the write command itself: it pushes the workspace it just wrote to, so the
+write and the push are one step.
 
 ## How it works
 
