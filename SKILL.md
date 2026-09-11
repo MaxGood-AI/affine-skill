@@ -5,7 +5,7 @@ license: BSD-3-Clause
 homepage: https://github.com/MaxGood-AI/affine-skill
 compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus Python >= 3.10. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
 metadata:
-  version: "0.3.0"
+  version: "0.4.0"
   author: Mishkin Berteig
   openclaw:
     emoji: "📚"
@@ -65,8 +65,8 @@ minute). Every command prints plain text; add `--json` to any command for JSON o
 ### Create a document
 
 1. Write the body as Markdown to a file, for example `/tmp/body.md`. Supported: `#` headings,
-   `-` / `1.` / `- [ ]` lists, `>` quotes, fenced code, `---` rules, paragraphs (one line = one
-   paragraph).
+   `-` / `1.` / `- [ ]` lists, `>` quotes, fenced code, `---` rules, pipe tables (header row,
+   `| --- |` separator row, body rows), paragraphs (one line = one paragraph).
 2. `affine new --title "Meeting Notes 2026-09-07" --body-file /tmp/body.md --sync`
 3. Output: the new DOC_ID, then `synced 1 workspace(s)`.
 
@@ -141,8 +141,8 @@ limit it to one workspace, and `--json` for machine-readable output.
   `--in-block`) must match **exactly one** block. When several match, the error lists them:
   respond with a longer text, `--in-block`, or (for replace only) `--all`.
 - An anchor that equals a whole block's text beats one that is merely contained in a block.
-- Prefer `--replace` over deleting and recreating a document. Replacement keeps block ids,
-  inline formatting and tables intact; recreating destroys every table.
+- Prefer `--replace` over deleting and recreating a document. Replacement keeps block ids and
+  inline formatting intact; recreating drops inline formatting and column widths.
 
 ## Errors and what to do
 
@@ -164,6 +164,8 @@ limit it to one workspace, and `--json` for machine-readable output.
 - `delete` moves to Trash and is recoverable in the app. `--delete-block` is not.
 - Reads render tables as Markdown tables. Inline bold/italic/links come out as plain text;
   database blocks and canvas elements come out as placeholders.
-- New content is limited to paragraphs, headings, lists, quotes, code and dividers. `--replace`
-  edits the text of any existing block, including table cells, so tables are corrected in place.
+- New content is limited to paragraphs, headings, lists, quotes, code, dividers and tables. A
+  pipe table becomes a real AFFiNE table with the first row as its header; cell text is plain,
+  and `\|` inside a cell is a literal pipe. `--replace` edits the text of any existing block,
+  including table cells, so tables are corrected in place.
 - Requires the AFFiNE desktop app ≥ v0.27.3, installed and signed in. macOS only.

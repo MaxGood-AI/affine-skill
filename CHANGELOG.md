@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-09-11
+
+Tables in written content.
+
+- `new`, `edit --insert-after/--insert-before` and `edit --append` turn a GitHub-flavored pipe
+  table (header row, `| --- |` separator row, body rows) into a real `affine:table` block: one
+  column per header cell, one row per line, first row as the header, `\|` as a literal pipe in a
+  cell, short rows padded and long rows truncated to the header width. Column and row order use
+  BlockSuite fractional-index keys (`a0`, `a1`, …), the same order `read` sorts by, so a table
+  round-trips through `new` and `read` unchanged.
+- Insert and append validation covers every table cell, so a table that failed to land is
+  rejected before anything is written.
+
 ## [0.3.0] — 2026-09-07
 
 OpenClaw compatibility and a SKILL.md written for smaller models.

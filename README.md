@@ -149,7 +149,8 @@ Run tests: `PYTHONPATH=. ./.venv/bin/python -m unittest discover -s tests`
 ## Compatibility & scope
 
 macOS only for the app lifecycle (`osascript`/`open`); the decode/encode core is portable.
-Tables (`affine:table`) render as Markdown tables on read. Inline formatting
+Tables (`affine:table`) render as Markdown tables on read, and a Markdown pipe table in new,
+inserted or appended content becomes an `affine:table` block (first row = header). Inline formatting
 (bold/italic/links), database blocks, and edgeless-canvas elements render as plain text or
 placeholders on read and are not produced on write in this version. Tested against AFFiNE
 self-hosted 0.27 with desktop client 0.27.3.

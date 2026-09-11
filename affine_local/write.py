@@ -221,8 +221,8 @@ def plan_insert(base_doc, doc_id, anchor, markdown, before=False):
     if B.children_of(vblocks, parent_id) != want_children:
         raise WriteError("inserted blocks did not land in the expected position — aborting")
     _t, md = decode.doc_to_markdown(verify)
-    for spec in specs:
-        if spec.get("text") and spec["text"] not in md:
+    for text in _spec_texts(specs):
+        if text not in md:
             raise WriteError("inserted content failed in-memory validation — aborting")
 
     where = "before" if before else "after"
@@ -350,7 +350,7 @@ def plan_append(base_doc, doc_id, markdown):
     note_id = B.find_note(wblocks)
     if note_id is None:
         raise WriteError(f"doc {doc_id} not found or has no editable note")
-    first_text = next((s.get("text", "") for s in specs if s.get("text")), None)
+    first_text = next(iter(_spec_texts(specs)), None)
     with work.transaction():
         B.append_specs_to_note(wblocks, note_id, specs)
     delta = work.get_update(sv)
@@ -412,6 +412,18 @@ def _verify(base_bytes, delta):
     v.apply_update(base_bytes)
     v.apply_update(delta)
     return v
+
+
+def _spec_texts(specs):
+    """Texts a rendered doc must contain for these specs: block text, or every table cell
+    as the Markdown renderer escapes it."""
+    out = []
+    for spec in specs:
+        if spec["flavour"] == "affine:table":
+            out.extend(decode._cell_md(c) for c in B.table_texts(spec))
+        elif spec.get("text"):
+            out.append(spec["text"])
+    return out
 
 
 def _block_ids(blocks):

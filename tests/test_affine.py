@@ -16,6 +16,7 @@ from affine_local import search as search_mod
 from affine_local import store
 from affine_local import textops as T
 from affine_local import write as write_mod
+from pycrdt import Map
 
 
 class TestMarkdownParse(unittest.TestCase):
@@ -137,6 +138,60 @@ def _apply(base, change):
     for _doc_id, delta in change.deltas:
         out.apply_update(delta)
     return out
+
+
+class TestTableParse(unittest.TestCase):
+    TABLE = "| Tier | Price |\n| --- | --- |\n| Tester | free |\n| Essential | $499 |"
+
+    def test_pipe_table_becomes_one_table_spec(self):
+        specs = B.parse_markdown("before\n\n" + self.TABLE + "\n\nafter")
+        self.assertEqual([s["flavour"] for s in specs],
+                         ["affine:paragraph", "affine:table", "affine:paragraph"])
+        self.assertEqual(specs[1]["rows"],
+                         [["Tier", "Price"], ["Tester", "free"], ["Essential", "$499"]])
+
+    def test_escaped_pipe_and_ragged_rows(self):
+        specs = B.parse_markdown("| A | B |\n|---|---|\n| x \\| y |\n| 1 | 2 | 3 |")
+        self.assertEqual(specs[0]["rows"], [["A", "B"], ["x | y", ""], ["1", "2"]])
+
+    def test_pipe_line_without_separator_stays_a_paragraph(self):
+        specs = B.parse_markdown("| just | text |\nnext")
+        self.assertEqual([s["flavour"] for s in specs], ["affine:paragraph", "affine:paragraph"])
+
+    def test_frac_index_is_ascii_ascending(self):
+        keys = [B.frac_index(i) for i in range(70)]
+        self.assertEqual(keys, sorted(keys))
+        self.assertEqual(keys[0], "a0")
+        self.assertEqual(len(set(keys)), 70)
+
+
+class TestTableRoundTrip(unittest.TestCase):
+    def test_build_then_decode_renders_same_table(self):
+        md = "intro\n\n| A | B |\n| --- | --- |\n| 1 | x \\| y |\n| 2 |  |\n\nafter"
+        _t, out = decode.doc_to_markdown(B.build_content_doc("T", md))
+        lines = [l for l in out.splitlines() if l.strip()]
+        self.assertEqual(lines, ["intro", "| A | B |", "| --- | --- |",
+                                 "| 1 | x \\| y |", "| 2 |  |", "after"])
+
+    def test_table_block_uses_flat_affine_props(self):
+        doc = B.build_content_doc("T", "| H |\n|---|\n| c |")
+        blocks = doc.get("blocks", type=Map)
+        tbl = next(blocks[b] for b in blocks.keys() if blocks[b]["sys:flavour"] == "affine:table")
+        keys = list(tbl.keys())
+        self.assertEqual(sum(k.startswith("prop:columns.") and k.endswith(".columnId") for k in keys), 1)
+        self.assertEqual(sum(k.startswith("prop:rows.") and k.endswith(".rowId") for k in keys), 2)
+        self.assertEqual(sum(k.startswith("prop:cells.") and k.endswith(".text") for k in keys), 2)
+
+    def test_insert_and_append_validate_table_cells(self):
+        doc = B.build_content_doc("T", "head\ntail")
+        table = "| K | V |\n|---|---|\n| a | b |"
+        change = write_mod.plan_insert(doc, "d1", "head", table)
+        _t, md = decode.doc_to_markdown(_apply(doc, change))
+        lines = [l for l in md.splitlines() if l.strip()]
+        self.assertEqual(lines, ["head", "| K | V |", "| --- | --- |", "| a | b |", "tail"])
+        change = write_mod.plan_append(doc, "d1", table)
+        _t, md = decode.doc_to_markdown(_apply(doc, change))
+        self.assertTrue(md.rstrip().endswith("| a | b |"))
 
 
 class TestByteOffsets(unittest.TestCase):

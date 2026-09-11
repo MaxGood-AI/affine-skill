@@ -3,8 +3,9 @@
 """Build BlockSuite (Yjs) blocks from Markdown, for create and append.
 
 Supported: headings (#..######), blockquotes (>), bullet/numbered/todo lists,
-fenced code (```lang), horizontal rules (---), and plain paragraphs (one line = one
-paragraph). Inline formatting is kept as plain text in v1.
+fenced code (```lang), horizontal rules (---), GitHub-flavored pipe tables (a header row,
+a `---` separator row, then body rows), and plain paragraphs (one line = one paragraph).
+Inline formatting is kept as plain text in v1.
 """
 import re
 import secrets
@@ -20,6 +21,34 @@ def nid(n=10):
 
 def new_doc_id():
     return nid(21)
+
+
+_TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
+
+
+def _split_table_row(line):
+    """Cells of one pipe-table row: outer pipes dropped, `\\|` unescaped, whitespace trimmed."""
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|") and not body.endswith("\\|"):
+        body = body[:-1]
+    cells = re.split(r"(?<!\\)\|", body)
+    return [c.replace("\\|", "|").strip() for c in cells]
+
+
+def frac_index(i):
+    """BlockSuite fractional-index key for position i (0-based), ascending in ASCII order:
+    a0..a9, aA..aZ, aa..az (62 keys), then b00.. for larger tables."""
+    if i < len(_ALPH):
+        return "a" + _ALPH[i]
+    i -= len(_ALPH)
+    return "b" + _ALPH[i // len(_ALPH)] + _ALPH[i % len(_ALPH)]
+
+
+def table_texts(spec):
+    """Every non-empty cell of a table spec, in row-major order."""
+    return [c for row in spec.get("rows", []) for c in row if c]
 
 
 def parse_markdown(md):
@@ -44,6 +73,17 @@ def parse_markdown(md):
         if re.match(r"^(-{3,}|\*{3,})$", stripped):
             specs.append({"flavour": "affine:divider"})
             i += 1
+            continue
+        if stripped.startswith("|") and i + 1 < len(lines) and _TABLE_SEP.match(lines[i + 1].strip()):
+            header = _split_table_row(stripped)
+            rows = [header]
+            i += 2
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                cells = _split_table_row(lines[i])
+                cells = (cells + [""] * len(header))[:len(header)]
+                rows.append(cells)
+                i += 1
+            specs.append({"flavour": "affine:table", "rows": rows})
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
         if m:
@@ -86,6 +126,8 @@ def _make_block(spec):
         return bid, Map({"sys:id": bid, "sys:flavour": "affine:code", "sys:version": 1,
                          "sys:children": Array([]), "prop:language": spec.get("language") or "Plain Text",
                          "prop:text": Text(spec.get("text", ""))})
+    if fl == "affine:table":
+        return bid, _make_table(bid, spec.get("rows") or [[""]])
     if fl == "affine:list":
         return bid, Map({"sys:id": bid, "sys:flavour": "affine:list", "sys:version": 1,
                          "sys:children": Array([]), "prop:type": spec.get("type", "bulleted"),
@@ -94,6 +136,23 @@ def _make_block(spec):
     return bid, Map({"sys:id": bid, "sys:flavour": "affine:paragraph", "sys:version": 1,
                      "sys:children": Array([]), "prop:type": spec.get("type", "text"),
                      "prop:text": Text(spec.get("text", "")), "prop:collapsed": False})
+
+
+def _make_table(bid, rows):
+    """An affine:table block (flat props, first row is the header) from a list of cell rows."""
+    props = {"sys:id": bid, "sys:flavour": "affine:table", "sys:version": 1,
+             "sys:children": Array([])}
+    col_ids = [nid(10) for _ in rows[0]]
+    for ci, cid in enumerate(col_ids):
+        props[f"prop:columns.{cid}.columnId"] = cid
+        props[f"prop:columns.{cid}.order"] = frac_index(ci)
+    for ri, row in enumerate(rows):
+        rid = nid(10)
+        props[f"prop:rows.{rid}.rowId"] = rid
+        props[f"prop:rows.{rid}.order"] = frac_index(ri)
+        for cid, text in zip(col_ids, row):
+            props[f"prop:cells.{rid}:{cid}.text"] = Text(text)
+    return Map(props)
 
 
 def find_note(blocks):
