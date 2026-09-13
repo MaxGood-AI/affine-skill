@@ -62,20 +62,23 @@ finish (the prompt reappears) before the next one.
 
 ---
 
-## Step 2 — Make sure Python is installed (one-time)
+## Step 2 — Install uv (one-time)
 
-The skill uses a free tool called **Python**, version **3.10 or newer**. Most Macs need it
-installed once (the copy Apple ships is 3.9, which is too old).
+The skill uses a free tool called **uv**. You only install this one thing — uv takes care of
+everything else the skill needs behind the scenes, including the right version of Python.
 
 1. Open **Terminal** (see the note above) and run:
    ```
-   python3 --version
+   uv --version
    ```
-2. If you see `Python 3.10` or higher (for example `Python 3.14.5`), you're done — **skip to Step 3**.
-3. If you see an error, `Python 3.9.x`, or nothing useful, install Python:
-   - Go to **https://www.python.org/downloads/macos/**, download the latest **macOS installer**,
-     and run it (double-click, then click **Continue** / **Install** through the prompts).
-   - Then re-run `python3 --version` to confirm it now shows a version.
+2. If you see a version number (for example `uv 0.11.32`), you're done — **skip to Step 3**.
+3. If you see `command not found`, install uv by running this line in Terminal:
+   ```
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+   - When it finishes, **close Terminal and open it again**, then re-run `uv --version` to
+     confirm it now shows a version.
+   - If you already use Homebrew, `brew install uv` works just as well.
 
 ---
 
@@ -144,8 +147,8 @@ In **Terminal**, run:
 ~/affine-skill/affine workspaces
 ```
 
-- The **first time only**, it quietly installs a small helper — this can take up to a minute and
-  needs an internet connection. Please wait.
+- The **first time only**, uv quietly fetches what the skill needs — this can take up to a
+  minute and needs an internet connection. Please wait. Later runs start immediately.
 - **Success looks like a list of your workspaces**, for example:
   ```
   cloud  a1b2c3...  Team Docs
@@ -186,14 +189,13 @@ window may flash to the front for a few seconds — **this is normal and expecte
 
 | Problem | Fix |
 |---|---|
-| `command not found: python3` | Install Python — see **Step 2**. |
-| `affine needs Python >= 3.10; none found` | Install a newer Python — see **Step 2**. |
+| `command not found: uv` or `uv: No such file or directory` | Install uv — see **Step 2**. If you just installed it, close Terminal and open it again. |
 | **"no AFFiNE workspaces found"** | Make sure AFFiNE is installed, **signed in**, and has finished syncing (Step 1). Then re-run Step 6. |
-| The first run seems stuck | It's downloading a helper on first use — give it up to a minute with internet on. |
+| The first run seems stuck | uv is downloading what it needs on first use — give it up to a minute with internet on. |
 | Your agent doesn't seem to use the skill | Fully **quit and reopen Claude Code**, then try again. Re-check the shortcut with `ls -l ~/.claude/skills/affine` (Step 4). |
 | Sync doesn't happen / it keeps asking you to sign in | Update AFFiNE to **v0.27.3 or newer** (Step 1), and remember to only close the window, never "Quit Completely." |
 | macOS won't open AFFiNE | **System Settings → Privacy & Security → Open Anyway** (Step 1). |
-| Terminal asks for your password when installing Python | That's macOS confirming the install — type your Mac login password and continue. |
+| Terminal asks for your password during install | That's macOS confirming the install — type your Mac login password and continue. |
 | You're on **Windows or Linux** | Not supported yet — follow the repo's [Issues](https://github.com/MaxGood-AI/affine-skill/issues) for progress. |
 
 ---

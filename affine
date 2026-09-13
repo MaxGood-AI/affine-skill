@@ -1,45 +1,34 @@
-#!/usr/bin/env bash
+#!/usr/bin/env -S uv run --script
 # Copyright (c) 2026 14334876 Canada Inc. (dba. MaxGood.work)
 # SPDX-License-Identifier: BSD-3-Clause
-# affine — thin launcher for the affine-skill CLI. Ensures the venv, then dispatches.
+# affine — entry point for the affine-skill CLI.
 #
-# The venv is built from the first CPython >= 3.10 found among: $AFFINE_PYTHON,
-# `python3` on PATH, the Homebrew / /usr/local interpreters, then versioned names.
-# (pycrdt, the sole dependency, needs Python >= 3.10; macOS ships 3.9 as /usr/bin/python3.)
-# A venv that can no longer import pycrdt is rebuilt automatically.
-set -euo pipefail
-SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV="$SKILL_DIR/.venv"
-MIN_MINOR=10
+# Dependencies are declared inline (PEP 723), so there is no virtualenv, no
+# requirements file, and no install step. The block below is the single source
+# of truth for the dependency pin.
+#
+# Any PEP 723 runner works. With uv the dependency set is cached outside this
+# directory — nothing is ever written into the skill folder, so the skill stays
+# safe to sync, back up, or commit — and a conforming Python is fetched
+# automatically if the host has none.
+#
+#   ./affine …                 # uv, via the shebang above
+#   uv run --script affine …   # explicit, or where `env -S` is unavailable
+#   python3 affine …           # any interpreter that can already import pycrdt
+#
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pycrdt==0.14.1"]
+# ///
+"""Thin entry point: resolve the bundled package, then dispatch to its CLI."""
 
-usable() {
-  local py="$1"
-  command -v "$py" >/dev/null 2>&1 || return 1
-  "$py" -c "import sys; sys.exit(0 if sys.version_info >= (3, $MIN_MINOR) else 1)" >/dev/null 2>&1
-}
+import pathlib
+import sys
 
-find_python() {
-  local c
-  for c in "${AFFINE_PYTHON:-}" python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 \
-           python3.14 python3.13 python3.12 python3.11 python3.10; do
-    [ -n "$c" ] || continue
-    if usable "$c"; then
-      command -v "$c"
-      return 0
-    fi
-  done
-  return 1
-}
+# affine_local ships alongside this file. PEP 723 covers such local, in-tree
+# dependencies via sys.path rather than the dependency list above.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-if ! "$VENV/bin/python" -c "import pycrdt" >/dev/null 2>&1; then
-  rm -rf "$VENV"
-  if ! PY="$(find_python)"; then
-    echo "error: affine needs Python >= 3.$MIN_MINOR; none found." >&2
-    echo "       Install one (e.g. 'brew install python') or set AFFINE_PYTHON=/path/to/python3." >&2
-    exit 1
-  fi
-  "$PY" -m venv "$VENV" >/dev/null
-  "$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
-  "$VENV/bin/pip" install --quiet -r "$SKILL_DIR/requirements.txt"
-fi
-exec env PYTHONPATH="$SKILL_DIR" "$VENV/bin/python" -m affine_local.cli "$@"
+from affine_local.cli import main
+
+sys.exit(main())

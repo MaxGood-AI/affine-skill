@@ -3,9 +3,9 @@ name: affine
 description: Search, read, create, edit, and delete documents in the team's self-hosted AFFiNE knowledge base (the wiki) through the AFFiNE desktop app's local store — no server credentials or API tokens. Use for any request that mentions AFFiNE, "our wiki", "the knowledge base", brand guidelines, or looking up / writing team documentation.
 license: BSD-3-Clause
 homepage: https://github.com/MaxGood-AI/affine-skill
-compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus Python >= 3.10. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
+compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus `uv`, which supplies a suitable Python automatically. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
   author: Mishkin Berteig
   openclaw:
     emoji: "📚"
@@ -13,7 +13,7 @@ metadata:
       - darwin
     requires:
       bins:
-        - python3
+        - uv
     homepage: https://github.com/MaxGood-AI/affine-skill
 ---
 
@@ -26,8 +26,8 @@ path. Examples:
 - OpenClaw: `~/.openclaw/workspace/skills/affine/affine`
 - Claude Code: `~/.claude/skills/affine/affine`
 
-No login, token, or API key is needed. The first run installs a small Python helper (up to a
-minute). Every command prints plain text; add `--json` to any command for JSON output.
+No login, token, or API key is needed. The first run pauses briefly while `uv` fetches the one
+dependency; afterwards it is instant. Every command prints plain text; add `--json` to any command for JSON output.
 
 ## Rules — read these first
 
@@ -154,7 +154,7 @@ limit it to one workspace, and `--json` for machine-readable output.
 | `multiple workspaces — pass --workspace` | `new` needs a target: add `--workspace "Name"` (names from `affine workspaces`). |
 | `AFFiNE is still running and would not quit` | Ask the user to quit AFFiNE, then retry the write. |
 | `unpushed after 120s ...` | Run `affine sync` again. If it repeats, tell the user AFFiNE may be signed out. |
-| `affine needs Python >= 3.10` | Tell the user to run `brew install python`. |
+| `uv: command not found` | Tell the user to install uv: `brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh \| sh`. |
 
 ## Safety and limits
 

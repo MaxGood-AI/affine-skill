@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-09-13
+
+Inline dependencies (PEP 723). No virtualenv, no install step.
+
+**Setup change:** `uv` replaces a system Python as the one prerequisite. Existing users should
+install it (`brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh | sh`); a leftover
+`.venv/` in the skill folder is no longer used and can be deleted.
+
+- `affine` is now a [PEP 723](https://peps.python.org/pep-0723/) script. It declares
+  `requires-python = ">=3.10"` and its sole dependency, `pycrdt==0.14.1`, in a comment block at
+  the top of the file, which is now the single source of truth for the pin. `requirements.txt`
+  is removed.
+- No virtualenv is created and nothing is written into the skill directory, so the folder stays
+  safe to sync, back up, or commit. Previously a 20 MB `.venv/` was built in place, and its
+  absolute interpreter symlink could break archive tools that require relative symlink targets.
+- The interpreter search (`$AFFINE_PYTHON`, `python3`, Homebrew, `/usr/local`, versioned names)
+  is gone. uv resolves a conforming Python and downloads one if the host has none, so a stock
+  Mac shipping Python 3.9 needs no separate Python install.
+- The per-invocation `import pycrdt` health check and venv rebuild are gone; startup drops from
+  ~0.12s to ~0.05s.
+- Runner-agnostic: `./affine` (uv via the shebang), `uv run --script affine`, or `python3 affine`
+  where `pycrdt` is already importable. Other PEP 723 runners such as `pipx run` also work.
+- `SKILL.md` gating metadata now requires `uv` rather than `python3`; skill version 0.5.0.
+- README documents, in plain language, that what decides whether the skill works is *where the
+  agent runs*, not which vendor it is. An agent on your own Mac works — Claude Code in the
+  terminal, OpenClaw, or running `./affine` by hand — while an agent on a remote server or in a
+  hosted sandbox cannot, because AFFiNE and its local store are not there.
+
 ## [0.4.0] — 2026-09-11
 
 Tables in written content.

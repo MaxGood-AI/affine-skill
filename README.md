@@ -18,12 +18,19 @@ It ships as a [Claude](https://claude.com/claude-code) / [OpenClaw](https://claw
 - macOS with the **AFFiNE desktop app ≥ v0.27.3** installed and **signed in**.
   v0.27.2 and earlier have a client cold-start bug that re-logs-in every launch and prevents
   programmatic sync — upgrade first.
-- **Python 3.10 or newer** (Homebrew's `python3` qualifies; the 3.9 that macOS ships as
-  `/usr/bin/python3` does not). The `affine` launcher creates its own `.venv` on first run and
-  installs the sole dependency, [`pycrdt`](https://pypi.org/project/pycrdt/) (Yjs/CRDT decode +
-  encode). It builds the venv from the first qualifying interpreter among `$AFFINE_PYTHON`,
-  `python3` on `PATH`, `/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, then
-  `python3.14` … `python3.10`, and rebuilds a venv that can no longer import `pycrdt`.
+- **[uv](https://docs.astral.sh/uv/)** — `brew install uv`, or
+  `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+  There is no install step and no virtualenv. `affine` is a [PEP 723](https://peps.python.org/pep-0723/)
+  script: it declares `requires-python = ">=3.10"` and its sole dependency,
+  [`pycrdt`](https://pypi.org/project/pycrdt/) (Yjs/CRDT decode + encode), in a comment block at
+  the top of the file. uv reads that block, caches the dependency outside the skill folder, and
+  **downloads a suitable Python if the machine has none** — so the 3.9 that macOS ships as
+  `/usr/bin/python3` is no longer a problem.
+
+  Nothing is ever written into the skill directory, which keeps it safe to sync, back up, or
+  commit. PEP 723 is a standard, so other runners (`pipx run`, `hatch run`) work too. If
+  `pycrdt` is already importable you can skip uv entirely and run `python3 affine …`.
 
 ## Install
 
@@ -50,9 +57,9 @@ cp -R affine-skill ~/.openclaw/workspace/skills/affine
 openclaw skills info affine
 ```
 
-`SKILL.md` carries the OpenClaw gating metadata (`os: darwin`, `requires.bins: python3`), and
-the skill's own `.gitignore` keeps `.venv/`, `config.json` and the lock file out of the
-workspace's git history. New OpenClaw sessions pick the skill up automatically.
+`SKILL.md` carries the OpenClaw gating metadata (`os: darwin`, `requires.bins: uv`), and the
+skill's own `.gitignore` keeps `config.json` and the lock file out of the workspace's git
+history. New OpenClaw sessions pick the skill up automatically.
 
 Copy `config.example.json` to `config.json` and set your default workspace (optional).
 
@@ -137,14 +144,35 @@ AFFiNE storage format changes. `delete` is recoverable (Trash), never a hard era
 ## Layout
 
 ```
-affine            launcher (ensures venv, dispatches)
+affine            PEP 723 entry point (inline deps, dispatches)
 affine_local/     store, decode, blocks, write, search, appctl, config, cli
 tests/            unit tests (pure functions + in-memory Yjs)
 SKILL.md          skill manifest + ClawHub frontmatter (agent-facing docs)
 config.example.json  copy to config.json to set a default workspace
 ```
 
-Run tests: `PYTHONPATH=. ./.venv/bin/python -m unittest discover -s tests`
+Run tests: `PYTHONPATH=. uv run --with pycrdt==0.14.1 python -m unittest discover -s tests`
+
+## Where this skill can and cannot run
+
+**What matters is where the agent runs, not which company makes it.**
+
+**It works whenever the agent runs on your own Mac** — the same machine where AFFiNE is
+installed. That includes **Claude Code in the terminal**, OpenClaw, and simply running
+`./affine …` yourself. This is the normal case, and it is what the Install section above sets up.
+
+**It cannot work when the agent runs on a server somewhere else** — for example Claude in a
+browser tab, or any agent using a hosted code-execution or sandbox environment. Three reasons,
+any one of which is enough:
+
+- The AFFiNE desktop app is not installed on that machine, and cannot be.
+- The skill reads and writes AFFiNE's local files, which exist only on your Mac.
+- Those environments usually cannot install the dependency this skill needs.
+
+So the same assistant can work in one place and not the other: Claude Code on your Mac reaches
+your wiki, while the same assistant in a browser tab cannot. This is a consequence of where the
+code runs, not a bug, and no setting changes it. To let an agent reach your wiki, run that agent
+on your Mac.
 
 ## Compatibility & scope
 
