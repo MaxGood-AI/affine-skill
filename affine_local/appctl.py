@@ -54,7 +54,7 @@ def open_workspace(workspace):
 
 def sync(workspaces, timeout=120):
     """Relaunch + foreground AFFiNE and wait until EVERY given workspace has no unpushed
-    docs. Workspaces that don't sync on their own (not the foreground tab) are engaged by
+    docs and no unuploaded image blobs. Workspaces that don't sync on their own (not the foreground tab) are engaged by
     opening them via deep link. Returns (synced: bool, seconds: int, remaining: [Workspace])."""
     relaunch()
     time.sleep(3)
@@ -80,6 +80,7 @@ def sync(workspaces, timeout=120):
 def unpushed(workspace):
     try:
         with store.read_conn(workspace.db_path) as con:
-            return store.unpushed_count(con, workspace.server_id)
+            return (store.unpushed_count(con, workspace.server_id)
+                    + store.unpushed_blob_count(con, workspace.server_id))
     except Exception:
         return 0

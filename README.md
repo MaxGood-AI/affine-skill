@@ -68,6 +68,7 @@ Copy `config.example.json` to `config.json` and set your default workspace (opti
 ```
 ./affine workspaces                 # list workspaces
 ./affine list [--limit N] [--all]   # list docs in EVERY workspace, grouped
+./affine folders                    # list the sidebar (Organize) folders of every workspace
 ./affine search "QUERY"             # keyword search across ALL workspaces → [workspace] id, title, snippet
 ./affine read DOC_ID                # auto-locate the doc in any workspace, print as Markdown
 ./affine new --title "T" --body-file body.md   # create in the default/--workspace target
@@ -75,6 +76,7 @@ Copy `config.example.json` to `config.json` and set your default workspace (opti
 ./affine delete DOC_ID              # move to Trash (auto-located)
 ./affine sync                       # push staged writes in ALL cloud workspaces
 ./affine new --title "T" --body-file body.md --sync   # write, then push, in one command
+./affine new --title "T" --body-file body.md --folder "Customer Support"   # into an existing sidebar folder
 ```
 
 ### Editing an existing doc
@@ -88,6 +90,7 @@ One operation per `affine edit` call:
 ./affine edit DOC_ID --delete-block "ANCHOR"          # drops that block and its children
 ./affine edit DOC_ID --set-title "New Title"          # page + sidebar together
 ./affine edit DOC_ID --append "text"                  # add to the end
+./affine edit DOC_ID --move-to-folder "Customer Support"   # into an existing sidebar folder
 ```
 
 Modifiers: `--all` (replace every occurrence), `--in-block "ANCHOR"` (confine a replace to one
@@ -108,6 +111,17 @@ Add `--json` for machine output. **Workspace-aware:** a server can hold many wor
 doc wherever it lives — you never need to know which workspace holds it. Pass `--workspace
 NAME` to restrict any command; only `new` requires a single target (default or `--workspace`).
 
+### Images and folders
+
+A Markdown line that is only `![alt](path.png)` becomes an AFFiNE image block (alt text =
+caption) in `new --body-file`, `edit --append-file`, `edit --text-file` and the inline forms.
+Relative paths resolve against the Markdown file's folder; png, jpg/jpeg, gif and webp are
+accepted, and a missing file or other type is refused before anything is written.
+
+`--folder "Name"` (on `new`) and `--move-to-folder "Name"` (on `edit`) place a doc in an
+**existing** sidebar folder, matched case-insensitively; an unknown or ambiguous name is refused
+with the folder list, and folders are never created. `affine folders` lists them (read-only).
+
 ### The write → sync workflow
 
 Write commands (`new`/`edit`/`delete`) **quit AFFiNE** and stage the change locally; they do
@@ -125,6 +139,15 @@ write and the push are one step.
 - **Write:** build a Yjs delta, validate it in memory, back up the DB, insert an `updates` row
   and bump `clocks`. Creates also register the doc in the root doc's `meta.pages`; the app
   self-heals the `spaces` subdoc on next launch. Deletes set the `trash` flag.
+- **Images:** the file's bytes go into the store's `blobs` table under AFFiNE's own blob key
+  (URL-safe base64 of the SHA-256 digest, `=` padded), and an `affine:image` block carries that key in
+  `prop:sourceId`. The skill writes no `peer_blob_sync` row; AFFiNE's blob sync uploads every local
+  blob that has no `uploaded_at` for the cloud peer (a scan every 15 s while the workspace is
+  connected), so a blob stays pending until the server confirms it. `affine sync` also waits for
+  those pending blobs.
+- **Folders:** the sidebar tree is the workspace's `db$folders` doc, one root-level `Y.Map` per record
+  (`id`, `type` = folder or doc, `parentId`, `data` = folder name or doc id, `index` = fractional-index
+  sort key). Placing a doc adds (or re-parents) one `doc` record after the folder's last sibling.
 - **Edit:** splice the block's existing `Y.Text` rather than rebuilding it from Markdown, so
   block ids, inline formatting and table structure are preserved. Offsets into a `Y.Text` are
   **UTF-8 byte offsets**, not Python string indices — passing a codepoint index corrupts any
@@ -145,7 +168,7 @@ AFFiNE storage format changes. `delete` is recoverable (Trash), never a hard era
 
 ```
 affine            PEP 723 entry point (inline deps, dispatches)
-affine_local/     store, decode, blocks, write, search, appctl, config, cli
+affine_local/     store, decode, blocks, images, folders, write, search, appctl, config, cli
 tests/            unit tests (pure functions + in-memory Yjs)
 SKILL.md          skill manifest + ClawHub frontmatter (agent-facing docs)
 config.example.json  copy to config.json to set a default workspace
@@ -180,5 +203,5 @@ macOS only for the app lifecycle (`osascript`/`open`); the decode/encode core is
 Tables (`affine:table`) render as Markdown tables on read, and a Markdown pipe table in new,
 inserted or appended content becomes an `affine:table` block (first row = header). Inline formatting
 (bold/italic/links), database blocks, and edgeless-canvas elements render as plain text or
-placeholders on read and are not produced on write in this version. Tested against AFFiNE
+placeholders on read and are not produced on write in this version. Images are written as page-mode image blocks. Tested against AFFiNE
 self-hosted 0.27 with desktop client 0.27.3.

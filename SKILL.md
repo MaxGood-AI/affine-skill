@@ -5,7 +5,7 @@ license: BSD-3-Clause
 homepage: https://github.com/MaxGood-AI/affine-skill
 compatibility: macOS with the AFFiNE desktop app (>= v0.27.3) installed and signed in, plus `uv`, which supplies a suitable Python automatically. Operates directly on the local AFFiNE SQLite store; the desktop app syncs changes to the server. No API keys or environment variables.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
   author: Mishkin Berteig
   openclaw:
     emoji: "📚"
@@ -35,7 +35,7 @@ dependency; afterwards it is instant. Every command prints plain text; add `--js
 2. Multi-line text never goes on the command line. Write it to a file (for example
    `/tmp/body.md`) and pass the file with `--body-file`, `--append-file`, `--text-file` or
    `--with-file`.
-3. Reading (`workspaces`, `list`, `search`, `read`, and any command with `--dry-run`) is always
+3. Reading (`workspaces`, `list`, `folders`, `search`, `read`, and any command with `--dry-run`) is always
    safe. It never disturbs the AFFiNE app.
 4. Writing (`new`, `edit`, `delete`) quits the AFFiNE app, stages the change locally, and does
    **not** reach the server by itself. Add `--sync` to the write command to push right away, or
@@ -61,17 +61,41 @@ dependency; afterwards it is instant. Every command prints plain text; add `--js
 
 - `affine list` — every document in every workspace, one `DOC_ID  Title` per line.
 - `affine workspaces` — the workspaces (kind, id, name).
+- `affine folders` — the sidebar folders of every workspace (path, doc count, id).
 
 ### Create a document
 
 1. Write the body as Markdown to a file, for example `/tmp/body.md`. Supported: `#` headings,
    `-` / `1.` / `- [ ]` lists, `>` quotes, fenced code, `---` rules, pipe tables (header row,
-   `| --- |` separator row, body rows), paragraphs (one line = one paragraph).
+   `| --- |` separator row, body rows), images (a line that is only
+   `![alt text](path/to/file.png)`), paragraphs (one line = one paragraph).
 2. `affine new --title "Meeting Notes 2026-09-07" --body-file /tmp/body.md --sync`
 3. Output: the new DOC_ID, then `synced 1 workspace(s)`.
 
 The document is created in the default workspace named in the skill's `config.json`. Add
 `--workspace "Name"` to create it somewhere else.
+
+### Put images in a document
+
+Write each image on its own line of the Markdown file: `![Sign-in screen](images/01-signin.png)`.
+The alt text becomes the image caption. A relative path resolves against the folder that holds
+the Markdown file (the current folder for `--body` / `--text` / `--append` text); png, jpg/jpeg,
+gif and webp files are accepted. Works in `new --body-file`, `edit --append-file` and
+`edit --text-file`. A missing file or another file type is refused with an error before anything
+is written. The image is stored in the workspace and `--sync` (or `affine sync`) uploads it to the
+server so teammates see it; `affine sync` waits until the upload is confirmed.
+
+### Put a document in a sidebar folder
+
+1. `affine folders --workspace "Team Collaboration"` — lists the sidebar folders (read-only) as
+   `Path  (N docs)  FOLDER_ID`.
+2. New document: `affine new --title "T" --body-file /tmp/body.md --folder "Customer Support" --sync`
+3. Existing document: `affine edit DOC_ID --move-to-folder "Customer Support" --sync`
+
+The folder must already exist; the skill never creates folders. The name matches
+case-insensitively. An unknown or ambiguous name is refused with the list of folder names (for a
+name used by two nested folders, give the full path, `"Parent / Child"`). The document lands at
+the end of the folder.
 
 ### Change wording inside a document (works inside table cells too)
 
@@ -120,11 +144,13 @@ waits until every cloud workspace has pushed (usually 5–15 s). The window flas
 | `affine list [--limit N] [--all]` | List docs in every workspace. `--all` includes trashed docs. |
 | `affine search "QUERY" [--limit N]` | Keyword search across every workspace. |
 | `affine read DOC_ID` | Print a doc as Markdown (auto-located in any workspace). |
-| `affine new --title "T" --body-file FILE [--workspace "W"] [--sync]` | Create a doc; prints its id. `--body "text"` works for one-line bodies. |
+| `affine folders [--workspace "W"]` | List the sidebar folders (read-only). |
+| `affine new --title "T" --body-file FILE [--folder "F"] [--workspace "W"] [--sync]` | Create a doc; prints its id. `--folder` places it in an existing sidebar folder. `--body "text"` works for one-line bodies. Image lines `![alt](path)` become image blocks. |
 | `affine edit DOC_ID --replace "OLD" --with "NEW" [--all] [--in-block "A"] [--dry-run] [--sync]` | Replace literal text in place. |
 | `affine edit DOC_ID --insert-after "A" --text-file FILE [--dry-run] [--sync]` | Insert Markdown after the block containing A (`--insert-before` for before). `--text "MD"` for one line. |
 | `affine edit DOC_ID --delete-block "A" [--dry-run] [--sync]` | Delete the block containing A and its children. |
 | `affine edit DOC_ID --set-title "T" [--sync]` | Retitle a doc. |
+| `affine edit DOC_ID --move-to-folder "F" [--dry-run] [--sync]` | Put a doc in an existing sidebar folder. |
 | `affine edit DOC_ID --append-file FILE [--sync]` | Append Markdown at the end. `--append "MD"` for one line. |
 | `affine delete DOC_ID [--sync]` | Move a doc to Trash. |
 | `affine sync` | Push every staged change to the server. |
@@ -153,7 +179,9 @@ limit it to one workspace, and `--json` for machine-readable output.
 | `no match for ...` / several matches listed | See "How text matching works". |
 | `multiple workspaces — pass --workspace` | `new` needs a target: add `--workspace "Name"` (names from `affine workspaces`). |
 | `AFFiNE is still running and would not quit` | Ask the user to quit AFFiNE, then retry the write. |
-| `unpushed after 120s ...` | Run `affine sync` again. If it repeats, tell the user AFFiNE may be signed out. |
+| `unpushed after 120s ...` | Run `affine sync` again. If it repeats, tell the user AFFiNE may be signed out (or an image is over the server's size or capacity limit). |
+| `image file not found` / `unsupported type` / `not a valid image/png` | Fix the path or use a png, jpg/jpeg, gif or webp file; nothing was written. |
+| `no folder named ...` / `N folders are named ...` | Pick a name from the listed folders (or the full path); the skill never creates folders. |
 | `uv: command not found` | Tell the user to install uv: `brew install uv`, or `curl -LsSf https://astral.sh/uv/install.sh \| sh`. |
 
 ## Safety and limits
@@ -164,7 +192,9 @@ limit it to one workspace, and `--json` for machine-readable output.
 - `delete` moves to Trash and is recoverable in the app. `--delete-block` is not.
 - Reads render tables as Markdown tables. Inline bold/italic/links come out as plain text;
   database blocks and canvas elements come out as placeholders.
-- New content is limited to paragraphs, headings, lists, quotes, code, dividers and tables. A
+- New content is limited to paragraphs, headings, lists, quotes, code, dividers, images and tables. An
+  image line becomes an `affine:image` block whose file is stored as a workspace blob keyed by its
+  content hash; reads render it as `![caption](blob:KEY)`. A
   pipe table becomes a real AFFiNE table with the first row as its header; cell text is plain,
   and `\|` inside a cell is a literal pipe. `--replace` edits the text of any existing block,
   including table cells, so tables are corrected in place.

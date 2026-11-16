@@ -3,6 +3,26 @@
 All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-11-16
+
+Images in Markdown bodies, and placing documents in sidebar folders.
+
+- A line that is only `![alt](path)` in `new --body-file`, `edit --append-file`, `edit --text-file`
+  (and the inline `--body` / `--append` / `--text` forms) becomes an `affine:image` block. The file
+  is stored in the workspace `blobs` table under AFFiNE's blob key (URL-safe base64 SHA-256),
+  the alt text is the caption, and relative paths resolve against the Markdown file's folder. png,
+  jpg/jpeg, gif and webp are accepted; a missing file, another type or content that does not match
+  its extension is refused before AFFiNE is quit or anything is written.
+- `affine sync` now also waits until every stored blob is confirmed uploaded (`peer_blob_sync`),
+  so teammates see the images; the app's own blob sync does the upload.
+- Reads render an image as `![caption](blob:KEY)`.
+- `affine folders` lists the sidebar folders (path, doc count, id) read-only; `--json` supported.
+- `new --folder "Name"` and `edit DOC_ID --move-to-folder "Name"` place a doc in an existing sidebar
+  folder (case-insensitive; full path `"Parent / Child"` for a repeated name). An unknown or
+  ambiguous name is refused with the folder list. Folders are never created.
+- `edit` now plans against a read-only copy before quitting the app, so a bad image path or folder
+  name is refused without disturbing AFFiNE.
+
 ## [0.5.0] — 2026-09-13
 
 Inline dependencies (PEP 723). No virtualenv, no install step.

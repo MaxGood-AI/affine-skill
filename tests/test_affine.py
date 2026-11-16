@@ -5,6 +5,7 @@ timestamp helpers, search snippet. No AFFiNE app, no DB, no network."""
 import contextlib
 import datetime as dt
 import io
+import os
 import unittest
 from unittest import mock
 
@@ -12,6 +13,8 @@ from affine_local import blocks as B
 from affine_local import cli
 from affine_local import config
 from affine_local import decode
+from affine_local import folders
+from affine_local import images
 from affine_local import search as search_mod
 from affine_local import store
 from affine_local import textops as T
@@ -518,6 +521,332 @@ class TestCliSyncFlag(unittest.TestCase):
                 mock.patch.object(cli.store, "lock"), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 cli._after_write(ws, sync_now=True)
+
+# 1x1 transparent PNG
+PNG_BYTES = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c6360000002000001e221bc330000000049454e44ae426082")
+
+
+class TestImages(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = self._tmp.name
+        os.makedirs(os.path.join(self.dir, "images"))
+        with open(os.path.join(self.dir, "images", "01-shot.png"), "wb") as f:
+            f.write(PNG_BYTES)
+
+    def test_blob_id_is_urlsafe_base64_sha256_with_padding(self):
+        import base64, hashlib
+        key = images.blob_id(PNG_BYTES)
+        self.assertEqual(key, base64.urlsafe_b64encode(hashlib.sha256(PNG_BYTES).digest()).decode())
+        self.assertTrue(key.endswith("="))
+        self.assertEqual(len(key), 44)
+
+    def test_image_line_becomes_image_spec_relative_to_base_dir(self):
+        specs = B.parse_markdown("before\n![A screen](images/01-shot.png)\nafter", self.dir)
+        self.assertEqual([s["flavour"] for s in specs],
+                         ["affine:paragraph", "affine:image", "affine:paragraph"])
+        img = specs[1]
+        self.assertEqual(img["caption"], "A screen")
+        self.assertEqual(img["mime"], "image/png")
+        self.assertEqual(img["source_id"], images.blob_id(PNG_BYTES))
+        self.assertEqual(img["data"], PNG_BYTES)
+
+    def test_absolute_path_and_angle_brackets_and_title(self):
+        path = os.path.join(self.dir, "images", "01-shot.png")
+        specs = B.parse_markdown(f'![x](<{path}> "a title")', None)
+        self.assertEqual(specs[0]["flavour"], "affine:image")
+
+    def test_missing_file_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            B.parse_markdown("![x](images/nope.png)", self.dir)
+        self.assertIn("not found", str(cm.exception))
+
+    def test_unsupported_type_is_refused(self):
+        with open(os.path.join(self.dir, "a.svg"), "w") as f:
+            f.write("<svg/>")
+        with self.assertRaises(ValueError) as cm:
+            B.parse_markdown("![x](a.svg)", self.dir)
+        self.assertIn("unsupported type", str(cm.exception))
+
+    def test_content_must_match_extension(self):
+        with open(os.path.join(self.dir, "fake.png"), "wb") as f:
+            f.write(b"not a png")
+        with self.assertRaises(ValueError) as cm:
+            B.parse_markdown("![x](fake.png)", self.dir)
+        self.assertIn("not a valid image/png", str(cm.exception))
+
+    def test_all_allowed_extensions_map(self):
+        self.assertEqual(sorted(images.MIME_BY_EXT), [".gif", ".jpeg", ".jpg", ".png", ".webp"])
+
+    def test_image_block_structure(self):
+        doc = B.build_content_doc("T", "![A screen](images/01-shot.png)".replace("images", self.dir + "/images"))
+        blocks = doc.get("blocks", type=Map)
+        imgs = [blocks[b] for b in blocks.keys() if blocks[b]["sys:flavour"] == "affine:image"]
+        self.assertEqual(len(imgs), 1)
+        img = imgs[0]
+        self.assertEqual(img["prop:sourceId"], images.blob_id(PNG_BYTES))
+        self.assertEqual(img["prop:caption"], "A screen")
+        self.assertEqual(img["prop:size"], len(PNG_BYTES))
+        self.assertEqual(img["prop:xywh"], "[0,0,0,0]")
+        note = B.find_note(blocks)
+        self.assertIn(img["sys:id"], B.children_of(blocks, note))
+
+    def test_decode_round_trips_caption_and_source(self):
+        doc = B.build_content_doc("T", f"![Cap]({self.dir}/images/01-shot.png)")
+        _t, md = decode.doc_to_markdown(doc)
+        self.assertIn(f"![Cap](blob:{images.blob_id(PNG_BYTES)})", md)
+
+    def test_blobs_of_dedups_same_file(self):
+        specs = B.parse_markdown("![a](images/01-shot.png)\n![b](images/01-shot.png)", self.dir)
+        blobs = B.blobs_of(specs)
+        self.assertEqual(blobs, [(images.blob_id(PNG_BYTES), PNG_BYTES, "image/png")])
+
+    def test_append_plan_carries_blob_and_validates(self):
+        base = B.build_content_doc("T", "first")
+        change = write_mod.plan_append(base, "d1", "![s](images/01-shot.png)", base_dir=self.dir)
+        self.assertEqual(change.blobs[0][0], images.blob_id(PNG_BYTES))
+        _t, md = decode.doc_to_markdown(_apply(base, change))
+        self.assertIn("blob:" + images.blob_id(PNG_BYTES), md)
+
+    def test_insert_plan_carries_blob(self):
+        base = B.build_content_doc("T", "anchor line")
+        change = write_mod.plan_insert(base, "d1", "anchor line", "![s](images/01-shot.png)",
+                                       base_dir=self.dir)
+        self.assertEqual(len(change.blobs), 1)
+
+    def test_missing_image_in_plan_is_refused_before_any_delta(self):
+        base = B.build_content_doc("T", "first")
+        with self.assertRaises(ValueError):
+            write_mod.plan_append(base, "d1", "![s](nope.png)", base_dir=self.dir)
+
+
+def _store_db(path):
+    """An empty AFFiNE-shaped storage.db (same tables and columns the app creates)."""
+    import sqlite3
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE snapshots (doc_id VARCHAR PRIMARY KEY NOT NULL, data BLOB NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at TIMESTAMP NOT NULL);
+        CREATE TABLE updates (doc_id VARCHAR NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          data BLOB NOT NULL, PRIMARY KEY (doc_id, created_at));
+        CREATE TABLE clocks (doc_id VARCHAR PRIMARY KEY NOT NULL, timestamp TIMESTAMP NOT NULL);
+        CREATE TABLE blobs (key VARCHAR PRIMARY KEY NOT NULL, data BLOB NOT NULL, mime VARCHAR NOT NULL,
+          size INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, deleted_at TIMESTAMP);
+        CREATE TABLE peer_clocks (peer VARCHAR NOT NULL, doc_id VARCHAR NOT NULL,
+          remote_clock TIMESTAMP NOT NULL DEFAULT 0, pulled_remote_clock TIMESTAMP NOT NULL DEFAULT 0,
+          pushed_clock TIMESTAMP NOT NULL DEFAULT 0, PRIMARY KEY (peer, doc_id));
+        CREATE TABLE peer_blob_sync (peer VARCHAR NOT NULL, blob_id VARCHAR NOT NULL, uploaded_at TIMESTAMP,
+          PRIMARY KEY (peer, blob_id));
+    """)
+    con.commit()
+    return con
+
+
+def _folders_doc():
+    """A db$folders doc: folders Support and Ops (with a nested Ops / Support), one doc in Support,
+    one deleted record."""
+    from pycrdt import Doc
+    doc = Doc()
+    recs = {
+        "f1": {"id": "f1", "type": "folder", "parentId": None, "data": "Customer Support", "index": "Zs0abc"},
+        "f2": {"id": "f2", "type": "folder", "parentId": None, "data": "Ops", "index": "Zt0abc"},
+        "f3": {"id": "f3", "type": "folder", "parentId": "f2", "data": "Support", "index": "a0"},
+        "e1": {"id": "e1", "type": "doc", "parentId": "f1", "data": "docA", "index": "a00Fman"},
+    }
+    with doc.transaction():
+        for rid, rec in recs.items():
+            m = doc.get(rid, type=Map)
+            for k, v in rec.items():
+                m[k] = v
+        dead = doc.get("gone", type=Map)
+        dead["id"] = "gone"
+        dead["$$DELETED"] = True
+    return doc
+
+
+class TestFolders(unittest.TestCase):
+    def test_folder_list_has_paths_and_counts_and_skips_deleted(self):
+        listing = folders.folder_list(_folders_doc())
+        self.assertEqual([f["path"] for f in listing],
+                         ["Customer Support", "Ops", "Ops / Support"])
+        self.assertEqual({f["name"]: f["docs"] for f in listing}["Customer Support"], 1)
+
+    def test_find_folder_is_case_insensitive(self):
+        self.assertEqual(folders.find_folder(_folders_doc(), "  customer SUPPORT "), "f1")
+
+    def test_find_folder_ambiguous_name_lists_paths(self):
+        from pycrdt import Map as M
+        doc = _folders_doc()
+        with doc.transaction():
+            m = doc.get("f4", type=M)
+            for k, v in {"id": "f4", "type": "folder", "parentId": None, "data": "support", "index": "Zu0"}.items():
+                m[k] = v
+        with self.assertRaises(folders.FolderError) as cm:
+            folders.find_folder(doc, "Support")
+        self.assertIn("2 folders", str(cm.exception))
+        self.assertIn("Ops / Support", str(cm.exception))
+
+    def test_find_folder_by_full_path_when_name_is_ambiguous(self):
+        self.assertEqual(folders.find_folder(_folders_doc(), "ops / support"), "f3")
+
+    def test_missing_folder_lists_names_and_never_creates(self):
+        doc = _folders_doc()
+        before = set(doc.keys())
+        with self.assertRaises(folders.FolderError) as cm:
+            folders.plan_place(doc, "docB", "Nope")
+        self.assertIn("Customer Support", str(cm.exception))
+        self.assertEqual(set(doc.keys()), before)
+
+    def test_workspace_without_folders_says_so(self):
+        from pycrdt import Doc
+        with self.assertRaises(folders.FolderError) as cm:
+            folders.find_folder(Doc(), "X")
+        self.assertIn("no folders", str(cm.exception))
+
+    def test_index_after(self):
+        self.assertEqual(folders.index_after(None), "a0")
+        self.assertEqual(folders.index_after("Zs0abc"), "Zt")
+        self.assertEqual(folders.index_after("a00Fman"), "a1")
+        self.assertEqual(folders.index_after("Zz0x"), "a0")
+        self.assertGreater(folders.index_after("a0z"), "a0z")
+        self.assertGreater(folders.index_after("a00Fman"), "a00Fman")
+
+    def test_place_adds_doc_entry_after_existing_siblings(self):
+        doc = _folders_doc()
+        delta, summary = folders.plan_place(doc, "docB", "customer support")
+        self.assertIn("place docB in folder 'Customer Support'", summary)
+        from pycrdt import Doc
+        after = Doc()
+        after.apply_update(doc.get_update(b"\x00"))
+        after.apply_update(delta)
+        mine = [r for r in folders.records(after) if r["data"] == "docB"]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual((mine[0]["type"], mine[0]["parentId"]), ("doc", "f1"))
+        self.assertGreater(mine[0]["index"], "a00Fman")
+        self.assertEqual(len(mine[0]["id"]), 21)
+
+    def test_place_moves_existing_entry(self):
+        doc = _folders_doc()
+        delta, summary = folders.plan_place(doc, "docA", "Ops")
+        self.assertTrue(summary.startswith("move docA"))
+        from pycrdt import Doc
+        after = Doc()
+        after.apply_update(doc.get_update(b"\x00"))
+        after.apply_update(delta)
+        entries = [r for r in folders.records(after) if r["data"] == "docA"]
+        self.assertEqual([(e["id"], e["parentId"]) for e in entries], [("e1", "f2")])
+
+    def test_place_in_current_folder_is_refused(self):
+        with self.assertRaises(folders.FolderError):
+            folders.plan_place(_folders_doc(), "docA", "Customer Support")
+
+
+class TestStoreWrites(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = os.path.join(self._tmp.name, "storage.db")
+        con = _store_db(self.db)
+        from pycrdt import Doc, Array, Text
+        root = Doc()
+        meta = root.get("meta", type=Map)
+        with root.transaction():
+            meta["pages"] = Array([])
+        con.execute("INSERT INTO snapshots (doc_id, data, updated_at) VALUES (?,?,?)",
+                    ("ws1", root.get_update(b"\x00"), "2026-01-01 00:00:00.000"))
+        con.execute("INSERT INTO clocks VALUES ('ws1', '2026-01-01 00:00:00.000')")
+        fdoc = _folders_doc()
+        con.execute("INSERT INTO snapshots (doc_id, data, updated_at) VALUES (?,?,?)",
+                    ("db$folders", fdoc.get_update(b"\x00"), "2026-01-01 00:00:00.000"))
+        con.commit()
+        con.close()
+        with open(os.path.join(self._tmp.name, "s.png"), "wb") as f:
+            f.write(PNG_BYTES)
+
+    def _con(self):
+        import sqlite3
+        return sqlite3.connect(self.db)
+
+    def test_new_doc_with_image_and_folder(self):
+        doc_id = write_mod.new_doc(self.db, "ws1", "srv", "ws1", "Title",
+                                   "# Title\ntext\n![Shot](s.png)", base_dir=self._tmp.name,
+                                   folder="Customer Support")
+        con = self._con()
+        key, mime, size, data = con.execute("SELECT key, mime, size, data FROM blobs").fetchone()
+        self.assertEqual((key, mime, size, bytes(data)), (images.blob_id(PNG_BYTES), "image/png",
+                                                          len(PNG_BYTES), PNG_BYTES))
+        self.assertEqual(con.execute("SELECT count(*) FROM peer_blob_sync").fetchone()[0], 0)
+        doc = store.load_doc(con, doc_id)
+        _t, md = decode.doc_to_markdown(doc)
+        self.assertIn(f"![Shot](blob:{key})", md)
+        entries = [r for r in folders.records(folders.load(con)) if r["data"] == doc_id]
+        self.assertEqual([(e["type"], e["parentId"]) for e in entries], [("doc", "f1")])
+        self.assertEqual(con.execute("SELECT count(*) FROM clocks WHERE doc_id='db$folders'").fetchone()[0], 1)
+
+    def test_bad_folder_writes_nothing(self):
+        with self.assertRaises(folders.FolderError):
+            write_mod.new_doc(self.db, "ws1", "srv", "ws1", "T", "x", folder="Nope")
+        con = self._con()
+        self.assertEqual(con.execute("SELECT count(*) FROM updates").fetchone()[0], 0)
+        self.assertEqual(con.execute("SELECT count(*) FROM blobs").fetchone()[0], 0)
+
+    def test_bad_image_writes_nothing(self):
+        with self.assertRaises(ValueError):
+            write_mod.new_doc(self.db, "ws1", "srv", "ws1", "T", "![x](missing.png)",
+                              base_dir=self._tmp.name)
+        self.assertEqual(self._con().execute("SELECT count(*) FROM updates").fetchone()[0], 0)
+
+    def test_commit_stores_blob_with_append(self):
+        doc_id = write_mod.new_doc(self.db, "ws1", "srv", "ws1", "T", "first")
+        con = self._con()
+        base = store.load_doc(con, doc_id)
+        change = write_mod.plan_append(base, doc_id, "![s](s.png)", base_dir=self._tmp.name)
+        write_mod.commit(self.db, change)
+        con = self._con()
+        self.assertEqual(con.execute("SELECT count(*) FROM blobs").fetchone()[0], 1)
+        _t, md = decode.doc_to_markdown(store.load_doc(con, doc_id))
+        self.assertIn("blob:" + images.blob_id(PNG_BYTES), md)
+
+    def test_move_to_folder_commit(self):
+        doc_id = write_mod.new_doc(self.db, "ws1", "srv", "ws1", "T", "first")
+        con = self._con()
+        change = write_mod.plan_move_to_folder(folders.load(con), doc_id, "Ops")
+        write_mod.commit(self.db, change)
+        con = self._con()
+        entries = [r for r in folders.records(folders.load(con)) if r["data"] == doc_id]
+        self.assertEqual([e["parentId"] for e in entries], ["f2"])
+
+    def test_unpushed_blob_count_follows_uploaded_marker(self):
+        write_mod.new_doc(self.db, "ws1", "srv", "ws1", "T", "![s](s.png)", base_dir=self._tmp.name)
+        con = self._con()
+        self.assertEqual(store.unpushed_blob_count(con, "srv"), 1)
+        con.execute("INSERT INTO peer_blob_sync VALUES (?,?,?)",
+                    ("cloud:srv", images.blob_id(PNG_BYTES), "2026-11-16 00:00:00"))
+        con.commit()
+        self.assertEqual(store.unpushed_blob_count(con, "srv"), 0)
+        self.assertEqual(store.unpushed_blob_count(con, "other"), 1)
+
+
+class TestCliNewFolderFlags(unittest.TestCase):
+    def test_parser_accepts_folder_flags_and_folders_command(self):
+        p = cli.build_parser()
+        self.assertEqual(p.parse_args(["new", "--title", "T", "--folder", "F"]).folder, "F")
+        self.assertEqual(p.parse_args(["edit", "id", "--move-to-folder", "F"]).move_to_folder, "F")
+        self.assertIs(p.parse_args(["folders", "--json"]).fn, cli.cmd_folders)
+
+    def test_move_and_other_edit_ops_are_exclusive(self):
+        p = cli.build_parser()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            p.parse_args(["edit", "id", "--move-to-folder", "F", "--append", "x"])
+
+    def test_base_dir_is_the_markdown_files_folder(self):
+        self.assertEqual(cli._base_dir("/a/b/body.md"), "/a/b")
+        self.assertEqual(cli._base_dir(None), os.getcwd())
 
 
 if __name__ == "__main__":

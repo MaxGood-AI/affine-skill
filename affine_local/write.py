@@ -16,6 +16,7 @@ from pycrdt import Doc, Map, Array, Text
 
 from . import blocks as B
 from . import decode
+from . import folders as F
 from . import store
 from . import textops as T
 
@@ -29,11 +30,12 @@ class WriteError(RuntimeError):
 class Change:
     """One or more validated deltas, ready to commit, plus a human-readable summary."""
 
-    __slots__ = ("deltas", "summary")
+    __slots__ = ("deltas", "summary", "blobs")
 
-    def __init__(self, deltas, summary):
+    def __init__(self, deltas, summary, blobs=()):
         self.deltas = deltas  # [(doc_id, delta_bytes)]
         self.summary = summary  # [str]
+        self.blobs = list(blobs)  # [(blob key, bytes, mime)] stored with the deltas
 
 
 def _load_merged(con, doc_id):
@@ -55,10 +57,24 @@ def _strip_leading_h1(markdown):
     return markdown
 
 
-def new_doc(db_path, root_id, server_id, workspace_id, title, markdown):
+def _put_blobs(con, blobs):
+    """Store image bytes the way AFFiNE does. No `peer_blob_sync` row is written: a blob
+    without one is the app's signal that it still has to upload it to the server."""
+    for key, data, mime in blobs:
+        con.execute(
+            "INSERT INTO blobs (key, data, mime, size) VALUES (?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET data=excluded.data, mime=excluded.mime, "
+            "size=excluded.size, deleted_at=NULL", (key, data, mime, len(data)))
+
+
+def new_doc(db_path, root_id, server_id, workspace_id, title, markdown, base_dir=None, folder=None):
     """Create a new doc + register it in the workspace root doc's meta.pages.
-    Returns the new doc id. The app self-heals the `spaces` subdoc entry on next launch."""
-    content = B.build_content_doc(title, _strip_leading_h1(markdown))
+    Images in the Markdown are stored as blobs; `folder` (an existing sidebar folder name)
+    places the doc in that folder. Returns the new doc id. The app self-heals the `spaces`
+    subdoc entry on next launch."""
+    specs = B.parse_markdown(_strip_leading_h1(markdown), base_dir)
+    blobs = B.blobs_of(specs)
+    content = B.build_content_doc(title, specs=specs)
     content_bytes = _full_state(content)
     doc_id = B.new_doc_id()
     now_ms = int(time.time() * 1000)
@@ -78,9 +94,14 @@ def new_doc(db_path, root_id, server_id, workspace_id, title, markdown):
         root_delta = root.get_update(sv)
 
         # validate: page registered, content decodes with our title
-        _validate_new(root, doc_id, n_before, content, title)
+        _validate_new(root, doc_id, n_before, content, title, specs)
+
+        folder_delta = None
+        if folder is not None:
+            folder_delta, _summary = F.plan_place(F.load(con), doc_id, folder)
 
         store.backup(db_path)
+        _put_blobs(con, blobs)
         con.execute("INSERT INTO updates (doc_id, data, created_at) VALUES (?,?,?)",
                     (doc_id, content_bytes, new_ts))
         con.execute("INSERT INTO clocks (doc_id, timestamp) VALUES (?,?)", (doc_id, new_ts))
@@ -88,6 +109,13 @@ def new_doc(db_path, root_id, server_id, workspace_id, title, markdown):
                     (root_id, root_delta, new_ts))
         con.execute("INSERT INTO clocks (doc_id, timestamp) VALUES (?,?) "
                     "ON CONFLICT(doc_id) DO UPDATE SET timestamp=excluded.timestamp", (root_id, new_ts))
+        if folder_delta is not None:
+            f_ts = store.next_ts(con, F.FOLDERS_DOC_ID)
+            con.execute("INSERT INTO updates (doc_id, data, created_at) VALUES (?,?,?)",
+                        (F.FOLDERS_DOC_ID, folder_delta, f_ts))
+            con.execute("INSERT INTO clocks (doc_id, timestamp) VALUES (?,?) "
+                        "ON CONFLICT(doc_id) DO UPDATE SET timestamp=excluded.timestamp",
+                        (F.FOLDERS_DOC_ID, f_ts))
         con.commit()
         _assert_integrity(con)
     return doc_id
@@ -100,6 +128,7 @@ def commit(db_path, change):
     with store.write_conn(db_path) as con:
         store.check_schema(con)
         store.backup(db_path)
+        _put_blobs(con, change.blobs)
         for doc_id, delta in change.deltas:
             ts = store.next_ts(con, doc_id)
             con.execute("INSERT INTO updates (doc_id, data, created_at) VALUES (?,?,?)",
@@ -187,9 +216,9 @@ def plan_replace(base_doc, doc_id, old, new, replace_all=False, in_block=None):
     return Change([(doc_id, delta)], summary)
 
 
-def plan_insert(base_doc, doc_id, anchor, markdown, before=False):
+def plan_insert(base_doc, doc_id, anchor, markdown, before=False, base_dir=None):
     """Insert Markdown blocks immediately after (or before) the block holding `anchor`."""
-    specs = B.parse_markdown(markdown)
+    specs = B.parse_markdown(markdown, base_dir)
     if not specs:
         raise WriteError("nothing to insert (empty content)")
 
@@ -227,7 +256,8 @@ def plan_insert(base_doc, doc_id, anchor, markdown, before=False):
 
     where = "before" if before else "after"
     return Change([(doc_id, delta)],
-                  [f"insert {len(specs)} block(s) {where} {_flavour(wblocks, anchor_id)} {anchor_id}"])
+                  [f"insert {len(specs)} block(s) {where} {_flavour(wblocks, anchor_id)} {anchor_id}"],
+                  B.blobs_of(specs))
 
 
 def plan_delete_block(base_doc, doc_id, anchor):
@@ -336,9 +366,9 @@ def plan_set_title(base_doc, doc_id, root_doc, root_id, new_title):
                   [f"retitle {doc_id}: {old_title!r} -> {new_title!r}"])
 
 
-def plan_append(base_doc, doc_id, markdown):
+def plan_append(base_doc, doc_id, markdown, base_dir=None):
     """Append Markdown blocks to the end of the doc's note (planned, not written)."""
-    specs = B.parse_markdown(markdown)
+    specs = B.parse_markdown(markdown, base_dir)
     if not specs:
         raise WriteError("nothing to append (empty content)")
 
@@ -356,7 +386,13 @@ def plan_append(base_doc, doc_id, markdown):
     delta = work.get_update(sv)
 
     _validate_delta_contains(base_bytes, delta, first_text)
-    return Change([(doc_id, delta)], [f"append {len(specs)} block(s) to {doc_id}"])
+    return Change([(doc_id, delta)], [f"append {len(specs)} block(s) to {doc_id}"], B.blobs_of(specs))
+
+
+def plan_move_to_folder(folders_doc, doc_id, folder_name):
+    """Put an existing doc in an existing sidebar folder (planned, not written)."""
+    delta, summary = F.plan_place(folders_doc, doc_id, folder_name)
+    return Change([(F.FOLDERS_DOC_ID, delta)], [summary])
 
 
 def trash_doc(db_path, root_id, doc_id):
@@ -419,7 +455,9 @@ def _spec_texts(specs):
     as the Markdown renderer escapes it."""
     out = []
     for spec in specs:
-        if spec["flavour"] == "affine:table":
+        if spec["flavour"] == "affine:image":
+            out.append(f"blob:{spec['source_id']}")
+        elif spec["flavour"] == "affine:table":
             out.extend(decode._cell_md(c) for c in B.table_texts(spec))
         elif spec.get("text"):
             out.append(spec["text"])
@@ -503,7 +541,7 @@ def _pages_state(root):
     return out
 
 
-def _validate_new(root, doc_id, n_before, content, title):
+def _validate_new(root, doc_id, n_before, content, title, specs=()):
     pages = root.get("meta", type=Map)["pages"]
     if len(pages) != n_before + 1:
         raise WriteError("root registration produced wrong page count")
@@ -512,6 +550,9 @@ def _validate_new(root, doc_id, n_before, content, title):
     t, _md = decode.doc_to_markdown(content)
     if (title or "") and t != (title or "").strip():
         raise WriteError("content doc title mismatch")
+    for spec in specs:
+        if spec["flavour"] == "affine:image" and f"blob:{spec['source_id']}" not in _md:
+            raise WriteError("image block missing from the new doc — aborting")
 
 
 def _validate_delta_contains(base_bytes, delta, needle):

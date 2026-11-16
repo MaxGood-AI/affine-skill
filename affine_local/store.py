@@ -184,3 +184,15 @@ def unpushed_count(con, server_id):
         if cd and (pd is None or cd > pd):
             n += 1
     return n
+
+
+def unpushed_blob_count(con, server_id):
+    """Number of stored blobs the app has not yet confirmed as uploaded to the server.
+
+    The app uploads every local blob that has no `peer_blob_sync` row (or a row without
+    `uploaded_at`) for the cloud peer, and records `uploaded_at` once the server has it."""
+    return con.execute(
+        "SELECT count(*) FROM blobs b LEFT JOIN peer_blob_sync p "
+        "ON p.blob_id=b.key AND p.peer=? WHERE b.deleted_at IS NULL AND p.uploaded_at IS NULL",
+        (peer_id_for(server_id),),
+    ).fetchone()[0]

@@ -6,11 +6,17 @@ Supported: headings (#..######), blockquotes (>), bullet/numbered/todo lists,
 fenced code (```lang), horizontal rules (---), GitHub-flavored pipe tables (a header row,
 a `---` separator row, then body rows), and plain paragraphs (one line = one paragraph).
 Inline formatting is kept as plain text in v1.
+A line that is only `![alt](path)` becomes an `affine:image` block (alt text = caption); the
+file is read when the Markdown is parsed and its bytes travel with the spec so the writer can
+store them as a workspace blob.
 """
 import re
 import secrets
+import time
 
 from pycrdt import Doc, Map, Array, Text
+
+from . import images
 
 _ALPH = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -23,6 +29,7 @@ def new_doc_id():
     return nid(21)
 
 
+_IMAGE_LINE = re.compile(r"^!\[([^\]]*)\]\(\s*(<[^>]+>|[^)\s]+)(?:\s+\"[^\"]*\")?\s*\)$")
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
 
 
@@ -51,7 +58,28 @@ def table_texts(spec):
     return [c for row in spec.get("rows", []) for c in row if c]
 
 
-def parse_markdown(md):
+def image_spec(match, base_dir):
+    """An `affine:image` spec from an `![alt](path)` match, with the file already loaded."""
+    path_text = match.group(2)
+    if path_text.startswith("<") and path_text.endswith(">"):
+        path_text = path_text[1:-1]
+    img = images.load_image(path_text, base_dir)
+    return {"flavour": "affine:image", "caption": match.group(1).strip(),
+            "source_id": img["source_id"], "mime": img["mime"], "data": img["data"]}
+
+
+def blobs_of(specs):
+    """[(blob key, bytes, mime)] for every image in the specs, one entry per distinct file."""
+    out = {}
+    for spec in specs:
+        if spec["flavour"] == "affine:image":
+            out.setdefault(spec["source_id"], (spec["source_id"], spec["data"], spec["mime"]))
+    return list(out.values())
+
+
+def parse_markdown(md, base_dir=None):
+    """Block specs for the Markdown. Image paths resolve against `base_dir` (default: the
+    current folder); a missing or unsupported image raises ValueError."""
     specs = []
     lines = (md or "").replace("\r\n", "\n").split("\n")
     i = 0
@@ -69,6 +97,11 @@ def parse_markdown(md):
                 i += 1
             i += 1
             specs.append({"flavour": "affine:code", "language": lang, "text": "\n".join(body)})
+            continue
+        m = _IMAGE_LINE.match(stripped)
+        if m:
+            specs.append(image_spec(m, base_dir))
+            i += 1
             continue
         if re.match(r"^(-{3,}|\*{3,})$", stripped):
             specs.append({"flavour": "affine:divider"})
@@ -126,6 +159,14 @@ def _make_block(spec):
         return bid, Map({"sys:id": bid, "sys:flavour": "affine:code", "sys:version": 1,
                          "sys:children": Array([]), "prop:language": spec.get("language") or "Plain Text",
                          "prop:text": Text(spec.get("text", ""))})
+    if fl == "affine:image":
+        now_ms = float(int(time.time() * 1000))
+        return bid, Map({"sys:id": bid, "sys:flavour": "affine:image", "sys:version": 1,
+                         "sys:children": Array([]), "prop:caption": spec.get("caption", ""),
+                         "prop:sourceId": spec["source_id"], "prop:width": 0, "prop:height": 0,
+                         "prop:size": len(spec["data"]), "prop:rotate": 0, "prop:index": "a0",
+                         "prop:xywh": "[0,0,0,0]", "prop:lockedBySelf": False,
+                         "prop:meta:createdAt": now_ms, "prop:meta:updatedAt": now_ms})
     if fl == "affine:table":
         return bid, _make_table(bid, spec.get("rows") or [[""]])
     if fl == "affine:list":
@@ -239,8 +280,9 @@ def remove_subtree(blocks, bid):
     return doomed
 
 
-def build_content_doc(title, markdown):
-    """Build a full new page-mode doc (page -> [surface, note] -> content blocks)."""
+def build_content_doc(title, markdown="", specs=None):
+    """Build a full new page-mode doc (page -> [surface, note] -> content blocks).
+    Pass `specs` (from parse_markdown) to build from already-parsed content."""
     doc = Doc()
     blocks = doc.get("blocks", type=Map)
     page_id, surface_id, note_id = nid(10), nid(10), nid(10)
@@ -259,6 +301,6 @@ def build_content_doc(title, markdown):
                                "prop:edgeless": Map({"style": Map({"shadowType": "--affine-note-shadow-box",
                                                                    "borderStyle": "none", "borderSize": 4,
                                                                    "borderRadius": 8})})})
-        specs = parse_markdown(markdown) or [{"flavour": "affine:paragraph", "type": "text", "text": ""}]
+        specs = (specs if specs is not None else parse_markdown(markdown)) or [{"flavour": "affine:paragraph", "type": "text", "text": ""}]
         append_specs_to_note(blocks, note_id, specs)
     return doc

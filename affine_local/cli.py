@@ -3,11 +3,14 @@
 """affine — deterministic local AFFiNE doc management (read/search/create/edit/delete/sync)."""
 import argparse
 import json
+import os
 import sys
 
 from . import appctl
 from . import config
+from . import blocks as blocks_mod
 from . import decode
+from . import folders as folders_mod
 from . import search as search_mod
 from . import store
 from . import write as write_mod
@@ -93,6 +96,37 @@ def _body(args):
     return args.body or ""
 
 
+def _base_dir(file_path):
+    """Folder that relative image paths resolve against: the Markdown file's own folder,
+    or the current folder for text given inline."""
+    return os.path.dirname(os.path.abspath(file_path)) if file_path else os.getcwd()
+
+
+def _check_folder(ws, name):
+    """Refuse an unknown or ambiguous folder name before the app is quit or anything written."""
+    with store.read_conn(ws.db_path) as con:
+        store.check_schema(con)
+        folders_mod.find_folder(folders_mod.load(con), name)
+
+
+def cmd_folders(args):
+    wss = config.resolve_scope(args.workspace)
+    rows = []
+    for ws in wss:
+        with store.read_conn(ws.db_path) as con:
+            store.check_schema(con)
+            listing = folders_mod.folder_list(folders_mod.load(con))
+        rows.append((ws, listing))
+    if args.json:
+        print(json.dumps([{"workspace": ws.name, **f} for ws, fl in rows for f in fl], indent=2))
+        return
+    for ws, listing in rows:
+        print(f"# {ws.name} — {len(listing)} folders")
+        for f in listing:
+            print(f"{f['path']}\t({f['docs']} docs)\t{f['id']}")
+        print()
+
+
 def _sync(wss):
     """Relaunch AFFiNE and wait until every given cloud workspace has pushed."""
     with store.lock():
@@ -115,12 +149,18 @@ def _after_write(ws, sync_now):
 
 def cmd_new(args):
     ws = config.resolve_one(args.workspace)
+    body = _body(args)
+    base_dir = _base_dir(args.body_file)
+    blocks_mod.parse_markdown(body, base_dir)  # refuse a bad image path before AFFiNE is quit
+    if args.folder is not None:
+        _check_folder(ws, args.folder)
     with store.lock():
         appctl.ensure_stopped()
         doc_id = write_mod.new_doc(ws.db_path, ws.root_id, ws.server_id, ws.workspace_id,
-                                   args.title, _body(args))
+                                   args.title, body, base_dir=base_dir, folder=args.folder)
     print(doc_id)
-    _note(f"created \"{args.title}\" in {ws.name}.")
+    where = f" in folder {args.folder!r}" if args.folder is not None else ""
+    _note(f"created \"{args.title}\" in {ws.name}{where}.")
     _after_write(ws, args.sync)
 
 
@@ -132,9 +172,11 @@ def _text_arg(args, inline, file_attr):
     return inline
 
 
-def _plan_edit(args, base, root, ws):
+def _plan_edit(args, base, root, ws, folders_doc=None):
     """Build the Change for whichever edit operation was requested."""
     doc_id = args.doc_id
+    if args.move_to_folder is not None:
+        return write_mod.plan_move_to_folder(folders_doc, doc_id, args.move_to_folder)
     if args.replace is not None:
         new = _text_arg(args, args.with_text, "with_file")
         if new is None:
@@ -147,7 +189,8 @@ def _plan_edit(args, base, root, ws):
             _err("--insert-after/--insert-before requires --text MD or --text-file FILE")
         before = args.insert_before is not None
         anchor = args.insert_before if before else args.insert_after
-        return write_mod.plan_insert(base, doc_id, anchor, md, before=before)
+        return write_mod.plan_insert(base, doc_id, anchor, md, before=before,
+                                     base_dir=_base_dir(args.text_file))
     if args.delete_block is not None:
         return write_mod.plan_delete_block(base, doc_id, args.delete_block)
     if args.set_title is not None:
@@ -155,21 +198,24 @@ def _plan_edit(args, base, root, ws):
     md = _text_arg(args, args.append, "append_file")
     if not (md or "").strip():
         _err("edit requires one of --append, --replace, --insert-after, "
-             "--insert-before, --delete-block or --set-title")
-    return write_mod.plan_append(base, doc_id, md)
+             "--insert-before, --delete-block, --set-title or --move-to-folder")
+    return write_mod.plan_append(base, doc_id, md, base_dir=_base_dir(args.append_file))
 
 
 def cmd_edit(args):
     ws = config.locate(args.doc_id, args.workspace)
     needs_root = args.set_title is not None
+    needs_folders = args.move_to_folder is not None
 
+    # Planning is read-only, so a dry run never has to quit the app, and a bad image path
+    # or folder name is refused before the app is quit on a real run.
+    with store.read_conn(ws.db_path) as con:
+        store.check_schema(con)
+        base = store.load_doc(con, args.doc_id)
+        root = store.load_doc(con, ws.root_id) if needs_root else None
+        fdoc = folders_mod.load(con) if needs_folders else None
+    change = _plan_edit(args, base, root, ws, fdoc)
     if args.dry_run:
-        # Planning is read-only, so a dry run never has to quit the app.
-        with store.read_conn(ws.db_path) as con:
-            store.check_schema(con)
-            base = store.load_doc(con, args.doc_id)
-            root = store.load_doc(con, ws.root_id) if needs_root else None
-        change = _plan_edit(args, base, root, ws)
         _note(f"(dry run — nothing written; workspace: {ws.name})")
         for line in change.summary:
             print(line)
@@ -181,7 +227,8 @@ def cmd_edit(args):
             store.check_schema(con)
             base = store.load_doc(con, args.doc_id)
             root = store.load_doc(con, ws.root_id) if needs_root else None
-        change = _plan_edit(args, base, root, ws)
+            fdoc = folders_mod.load(con) if needs_folders else None
+        change = _plan_edit(args, base, root, ws, fdoc)
         write_mod.commit(ws.db_path, change)
     for line in change.summary:
         print(line)
@@ -228,6 +275,10 @@ def build_parser():
     sp.add_argument("--all", action="store_true", help="include trashed docs")
     sp.set_defaults(fn=cmd_list)
 
+    sp = sub.add_parser("folders", help="list the sidebar folders (read-only)")
+    ws(sp); js(sp)
+    sp.set_defaults(fn=cmd_folders)
+
     sp = sub.add_parser("read", help="print a doc as Markdown")
     sp.add_argument("doc_id")
     ws(sp); js(sp)
@@ -243,6 +294,9 @@ def build_parser():
     sp.add_argument("--title", required=True)
     sp.add_argument("--body")
     sp.add_argument("--body-file")
+    sp.add_argument("--folder", metavar="NAME",
+                    help="place the doc in this existing sidebar folder (case-insensitive; "
+                         "see `affine folders`)")
     ws(sp); sync_flag(sp)
     sp.set_defaults(fn=cmd_new)
 
@@ -265,6 +319,8 @@ def build_parser():
     op.add_argument("--set-title", metavar="TITLE",
                     help="retitle the doc (updates the page and the workspace sidebar)")
     op.add_argument("--append", metavar="MD", help="append Markdown to the end of the doc")
+    op.add_argument("--move-to-folder", metavar="NAME",
+                    help="put the doc in this existing sidebar folder (see `affine folders`)")
     sp.add_argument("--with", dest="with_text", metavar="NEW",
                     help="replacement text for --replace (use '' to delete the match)")
     sp.add_argument("--with-file", metavar="FILE", help="read --with text from a file")

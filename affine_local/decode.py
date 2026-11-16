@@ -175,7 +175,7 @@ def _render_block(b, fl, depth):
     if fl == "affine:divider":
         return "---"
     if fl == "affine:image":
-        return f"![](blob:{_get(b, 'prop:sourceId', '')})"
+        return f"![{_txt(_get(b, 'prop:caption', '')).strip()}](blob:{_get(b, 'prop:sourceId', '')})"
     if fl in ("affine:attachment", "affine:bookmark") or (isinstance(fl, str) and fl.startswith("affine:embed")):
         name = _get(b, "prop:name") or _get(b, "prop:title") or _get(b, "prop:url") or ""
         return f"[{fl.split(':')[-1]}: {_txt(name)}]"
